@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tableau AI Chat</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Load Tableau Extensions API first -->
+    <script src="static/tableau.extensions.1.latest.min.js"></script>
+    <script src="static/script.js" defer></script>
+</head>
+<body>
+    <!-- Floating Chat Icon Button -->
+    <button id="chatIconBtn" class="chat-icon-btn" title="Open Chat">
+        💬
+    </button>
+
+    <!-- Chat Container (hidden by default) -->
+    <div id="chatContainer" class="chat-container-hidden">
+        <div class="container">
+            <header>
+                <h1>Tableau AI Assistant</h1>
+                <p>Ask questions about your Tableau data!</p>
+                <!-- Optional: Close button -->
+                <button id="closeChatBtn" class="close-chat-btn" title="Close Chat">&times;</button>
+            </header>
+
+            <div class="chat-box" id="chatBox">
+                <div class="message bot">
+                    Hello! Ask me anything about your Tableau data.
+                    <br><br>
+                    Try questions like:
+                    <br>• "Show me the top customers by sales"
+                    <br>• "What are the sales trends this quarter?"
+                </div>
+            </div>
+
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Type your question here..." autocomplete="off">
+                <button type="button" id="sendBtn">Send</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
