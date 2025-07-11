@@ -39,9 +39,6 @@ DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
 
 def generate_jwt():
-    """
-    Generate a fresh JWT for Tableau REST API sign-in using connected app.
-    """
     client_id = os.environ['TABLEAU_JWT_CLIENT_ID']
     secret_id = os.environ['TABLEAU_JWT_SECRET_ID']
     secret_value = os.environ['TABLEAU_JWT_SECRET']
@@ -64,9 +61,6 @@ def generate_jwt():
     return jwt_token
 
 def tableau_signin_with_jwt():
-    """
-    Sign in to Tableau REST API using a fresh JWT to get a session token.
-    """
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
@@ -95,6 +89,52 @@ def tableau_signin_with_jwt():
         print("Exception during REST API signin:")
         traceback.print_exc()
         raise RuntimeError("Tableau REST API signin failed. Check your JWT and site.")
+
+def log_all_published_datasources():
+    """
+    Use Tableau Metadata API (GraphQL) to log all published data source names.
+    """
+    domain = os.environ['TABLEAU_DOMAIN_FULL']
+    try:
+        token, site_id = tableau_signin_with_jwt()
+    except Exception as e:
+        print("Failed to sign in with JWT.")
+        return None
+
+    gql_url = f"{domain}/api/metadata/graphql"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        'Accept': 'application/json'
+    }
+    query = {
+        "query": """
+        query {
+            publishedDatasources {
+                name
+                luid
+                projectName
+            }
+        }
+        """
+    }
+    try:
+        resp = requests.post(gql_url, json=query, headers=headers)
+        print("Metadata API status (all datasources):", resp.status_code)
+        if resp.status_code == 200:
+            data = resp.json()
+            datasources = data.get("data", {}).get("publishedDatasources", [])
+            print("=== Published Datasources ===")
+            for ds in datasources:
+                print(f"Name: '{ds['name']}', LUID: {ds['luid']}, Project: {ds.get('projectName')}")
+            print("=============================")
+            return datasources
+        else:
+            print(f"Metadata API error: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        print("Exception during Metadata API call (all datasources):")
+        traceback.print_exc()
+    return None
 
 def lookup_published_datasource_metadata(datasource_name):
     """
@@ -137,19 +177,20 @@ def lookup_published_datasource_metadata(datasource_name):
     }
     try:
         resp = requests.post(gql_url, json=query, headers=headers)
-        print("Metadata API status:", resp.status_code)
-        print("Metadata API response:", resp.text)
+        print(f"Metadata API status (filtered for '{datasource_name}'):", resp.status_code)
+        print("Metadata API response (filtered):", resp.text)
         if resp.status_code == 200:
             data = resp.json()
             datasources = data.get("data", {}).get("publishedDatasources", [])
             if datasources:
+                print(f"Found datasource with name '{datasource_name}':", datasources[0])
                 return datasources[0]
             else:
-                print("No published data source found with that name.")
+                print(f"No published data source found with the name '{datasource_name}'.")
         else:
             print(f"Metadata API error: {resp.status_code} - {resp.text}")
     except Exception as e:
-        print("Exception during Metadata API call:")
+        print("Exception during Metadata API call (filtered):")
         traceback.print_exc()
     return None
 
@@ -159,18 +200,24 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
     first_name = next(iter(body.datasources.keys()))
+    print(f"Received data source request for: '{first_name}' from client: {client_id}")
     try:
+        # Log all published datasources for debugging
+        log_all_published_datasources()
         ds_metadata = lookup_published_datasource_metadata(first_name)
         if not ds_metadata:
+            print(f"Datasource '{first_name}' not found after logging all datasources.")
             raise HTTPException(
                 status_code=404,
                 detail=f"Datasource not found: {first_name}."
             )
         luid = ds_metadata["luid"]
+        print(f"Storing LUID '{luid}' for client '{client_id}'")
         DATASOURCE_LUID_STORE[client_id] = luid
         DATASOURCE_METADATA_STORE[client_id] = ds_metadata
         return {"status": "ok", "selected_luid": luid}
     except Exception as e:
+        print("Exception in receive_datasources endpoint:")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error looking up datasource: {str(e)}")
 
@@ -228,7 +275,6 @@ def health_check():
 @app.post("/chat")
 def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
     client_id = fastapi_request.client.host
-    # --- Wait for datasource LUID before allowing chat ---
     if client_id not in DATASOURCE_LUID_STORE or not DATASOURCE_LUID_STORE[client_id]:
         raise HTTPException(
             status_code=400,
