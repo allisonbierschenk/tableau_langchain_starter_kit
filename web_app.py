@@ -83,13 +83,15 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
             "site": {"contentUrl": site}
         }
     }
-    print(f"POST {url} with JWT")
+    print(f"POST {url} with payload: {payload}")
     resp = requests.post(url, json=payload, headers=headers)
     print(f"REST API signin status: {resp.status_code}")
     print(f"REST API signin response: {resp.text}")
     resp.raise_for_status()
     token = resp.json()['credentials']['token']
     site_id = resp.json()['credentials']['site']['id']
+    print(f"Received token: {token}")
+    print(f"Site ID: {site_id}")
     return token, site_id
 
 def lookup_published_datasource_metadata(datasource_name, tableau_username, user_regions):
@@ -101,11 +103,12 @@ def lookup_published_datasource_metadata(datasource_name, tableau_username, user
         "X-Tableau-Auth": token,
         "Accept": "application/json"
     }
-    print(f"GET {url} with Tableau token")
+    print(f"GET {url} with headers: {headers}")
     resp = requests.get(url, headers=headers)
     print(f"REST API datasources status: {resp.status_code}")
     if resp.status_code == 200:
         datasources = resp.json().get("datasources", {}).get("datasource", [])
+        print(f"Datasources received: {datasources}")
         for ds in datasources:
             if ds.get("name", "").lower() == datasource_name.lower():
                 print(f"Found datasource: {ds}")
@@ -129,11 +132,14 @@ def lookup_published_datasource_metadata(datasource_name, tableau_username, user
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
     client_id = request.client.host
+    print(f"Received /datasources request from client: {client_id}")
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
     first_name = next(iter(body.datasources.keys()))
+    print(f"Datasource requested: {first_name}")
     user_regions = get_user_regions(client_id)
     tableau_username = get_tableau_username(client_id)
+    print(f"User regions: {user_regions}, Tableau username: {tableau_username}")
     if not user_regions:
         raise HTTPException(status_code=403, detail="No region permissions found for this user.")
     ds_metadata = lookup_published_datasource_metadata(first_name, tableau_username, user_regions)
