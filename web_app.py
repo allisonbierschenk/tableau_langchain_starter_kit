@@ -87,41 +87,30 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
 
 def lookup_published_datasource_metadata(datasource_name, tableau_username, user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
+    api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
-    gql_url = f"{domain}/api/metadata/graphql"
+    url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
     headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        'Accept': 'application/json'
+        "X-Tableau-Auth": token,
+        "Accept": "application/json"
     }
-    query = {
-        "query": f"""
-        query Find_Datasources_LUID {{
-            publishedDatasources(filter: {{ name: "{datasource_name}" }}) {{
-                name
-                projectName
-                description
-                luid
-                uri
-                owner {{
-                    username
-                    name
-                    email
-                }}
-                hasActiveWarning
-                extractLastRefreshTime
-                extractLastIncrementalUpdateTime
-                extractLastUpdateTime
-            }}
-        }}
-        """
-    }
-    resp = requests.post(gql_url, json=query, headers=headers)
+    resp = requests.get(url, headers=headers)
     if resp.status_code == 200:
-        data = resp.json()
-        datasources = data.get("data", {}).get("publishedDatasources", [])
-        if datasources:
-            return datasources[0]
+        datasources = resp.json().get("datasources", {}).get("datasource", [])
+        for ds in datasources:
+            if ds.get("name", "").lower() == datasource_name.lower():
+                return {
+                    "name": ds.get("name"),
+                    "projectName": ds.get("projectName"),
+                    "description": ds.get("description"),
+                    "luid": ds.get("id"),
+                    "uri": ds.get("contentUrl"),
+                    "owner": ds.get("owner", {}),
+                    "hasActiveWarning": None,
+                    "extractLastRefreshTime": None,
+                    "extractLastIncrementalUpdateTime": None,
+                    "extractLastUpdateTime": None
+                }
     return None
 
 @app.post("/datasources")
