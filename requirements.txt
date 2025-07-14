@@ -6,4 +6,6 @@ pydantic==2.11.5
 python-dotenv==1.1.0
 uvicorn==0.34.3
 pyjwt
+langchain-mcp-tools
+
 

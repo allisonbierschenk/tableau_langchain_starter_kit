@@ -51,7 +51,8 @@ def generate_jwt():
         "aud": "tableau",
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
-        "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"]
+        "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
+        "Region": ['South', 'East']
     }
     headers = {
         "kid": secret_id,
