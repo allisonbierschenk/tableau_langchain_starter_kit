@@ -61,6 +61,9 @@ def generate_jwt(tableau_username, user_regions):
         "iss": client_id
     }
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
+    print("\n=== GENERATED JWT ===")
+    print(jwt_token)
+    print("=====================\n")
     return jwt_token
 
 def tableau_signin_with_jwt(tableau_username, user_regions):
@@ -68,6 +71,7 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
     jwt_token = generate_jwt(tableau_username, user_regions)
+    print(f"Using JWT for Tableau sign-in: {jwt_token}")
     url = f"{domain}/api/{api_version}/auth/signin"
     headers = {
         'Content-Type': 'application/json',
@@ -79,7 +83,10 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
             "site": {"contentUrl": site}
         }
     }
+    print(f"POST {url} with JWT")
     resp = requests.post(url, json=payload, headers=headers)
+    print(f"REST API signin status: {resp.status_code}")
+    print(f"REST API signin response: {resp.text}")
     resp.raise_for_status()
     token = resp.json()['credentials']['token']
     site_id = resp.json()['credentials']['site']['id']
@@ -94,11 +101,14 @@ def lookup_published_datasource_metadata(datasource_name, tableau_username, user
         "X-Tableau-Auth": token,
         "Accept": "application/json"
     }
+    print(f"GET {url} with Tableau token")
     resp = requests.get(url, headers=headers)
+    print(f"REST API datasources status: {resp.status_code}")
     if resp.status_code == 200:
         datasources = resp.json().get("datasources", {}).get("datasource", [])
         for ds in datasources:
             if ds.get("name", "").lower() == datasource_name.lower():
+                print(f"Found datasource: {ds}")
                 return {
                     "name": ds.get("name"),
                     "projectName": ds.get("projectName"),
@@ -111,6 +121,9 @@ def lookup_published_datasource_metadata(datasource_name, tableau_username, user
                     "extractLastIncrementalUpdateTime": None,
                     "extractLastUpdateTime": None
                 }
+        print("Datasource not found in REST API response.")
+    else:
+        print(f"REST API error: {resp.status_code} - {resp.text}")
     return None
 
 @app.post("/datasources")
@@ -129,6 +142,7 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     luid = ds_metadata["luid"]
     DATASOURCE_LUID_STORE[client_id] = luid
     DATASOURCE_METADATA_STORE[client_id] = ds_metadata
+    print(f"Stored LUID for client {client_id}: {luid}")
     return {"status": "ok", "selected_luid": luid}
 
 def setup_agent(request: Request = None):

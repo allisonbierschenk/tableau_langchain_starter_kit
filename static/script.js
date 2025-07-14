@@ -103,7 +103,7 @@ async function listAndSendDashboardDataSources() {
         } else {
             addMessage(
                 "🔎 <b>Detected data sources in this dashboard:</b><br>" +
-                namesArray.map(name => `• <b>${name}, ${name.luid}</b>`).join('<br>'),
+                namesArray.map(name => `• <b>${name}</b>`).join('<br>'),
                 "bot"
             );
         }
