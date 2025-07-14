@@ -10,14 +10,12 @@ import jwt
 import datetime
 import uuid
 
-# Import your existing components
 from langsmith import Client
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
 from utilities.prompt import build_agent_identity, build_agent_system_prompt
 
-# Load environment variables
 load_dotenv()
 
 langsmith_client = Client()
@@ -37,29 +35,26 @@ class DataSourcesRequest(BaseModel):
 
 DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
-USER_REGION_STORE = {}  # NEW: Store user regions per client
 
 def get_user_regions(client_id):
-    # This function should return the list of allowed regions for the current user.
-    # Replace this logic with your actual user-region lookup.
-    # For demo, we fetch from USER_REGION_STORE, but in production use your auth system.
-    return USER_REGION_STORE.get(client_id, [])
+    return ['West', 'South']
 
-def generate_jwt(user_regions):
+def get_tableau_username(client_id):
+    return os.environ['TABLEAU_USER']
+
+def generate_jwt(tableau_username, user_regions):
     client_id = os.environ['TABLEAU_JWT_CLIENT_ID']
     secret_id = os.environ['TABLEAU_JWT_SECRET_ID']
     secret_value = os.environ['TABLEAU_JWT_SECRET']
-    username = os.environ['TABLEAU_USER']
-
     now = datetime.datetime.now(datetime.UTC)
     payload = {
         "iss": client_id,
-        "sub": username,
+        "sub": tableau_username,
         "aud": "tableau",
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
         "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
-        "Region": user_regions  # ENFORCED: Set per-user region
+        "Region": user_regions
     }
     headers = {
         "kid": secret_id,
@@ -68,12 +63,11 @@ def generate_jwt(user_regions):
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
     return jwt_token
 
-def tableau_signin_with_jwt(user_regions):
+def tableau_signin_with_jwt(tableau_username, user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
-
-    jwt_token = generate_jwt(user_regions)
+    jwt_token = generate_jwt(tableau_username, user_regions)
     url = f"{domain}/api/{api_version}/auth/signin"
     headers = {
         'Content-Type': 'application/json',
@@ -85,70 +79,15 @@ def tableau_signin_with_jwt(user_regions):
             "site": {"contentUrl": site}
         }
     }
-    try:
-        resp = requests.post(url, json=payload, headers=headers)
-        print("REST API signin status:", resp.status_code)
-        print("REST API signin response:", resp.text)
-        resp.raise_for_status()
-        token = resp.json()['credentials']['token']
-        site_id = resp.json()['credentials']['site']['id']
-        return token, site_id
-    except Exception as e:
-        print("Exception during REST API signin:")
-        traceback.print_exc()
-        raise RuntimeError("Tableau REST API signin failed. Check your JWT and site.")
+    resp = requests.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    token = resp.json()['credentials']['token']
+    site_id = resp.json()['credentials']['site']['id']
+    return token, site_id
 
-def log_all_published_datasources(user_regions):
+def lookup_published_datasource_metadata(datasource_name, tableau_username, user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
-    try:
-        token, site_id = tableau_signin_with_jwt(user_regions)
-    except Exception as e:
-        print("Failed to sign in with JWT.")
-        return None
-
-    gql_url = f"{domain}/api/metadata/graphql"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        'Accept': 'application/json'
-    }
-    query = {
-        "query": """
-        query {
-            publishedDatasources {
-                name
-                luid
-                projectName
-            }
-        }
-        """
-    }
-    try:
-        resp = requests.post(gql_url, json=query, headers=headers)
-        print("Metadata API status (all datasources):", resp.status_code)
-        if resp.status_code == 200:
-            data = resp.json()
-            datasources = data.get("data", {}).get("publishedDatasources", [])
-            print("=== Published Datasources ===")
-            for ds in datasources:
-                print(f"Name: '{ds['name']}', LUID: {ds['luid']}, Project: {ds.get('projectName')}")
-            print("=============================")
-            return datasources
-        else:
-            print(f"Metadata API error: {resp.status_code} - {resp.text}")
-    except Exception as e:
-        print("Exception during Metadata API call (all datasources):")
-        traceback.print_exc()
-    return None
-
-def lookup_published_datasource_metadata(datasource_name, user_regions):
-    domain = os.environ['TABLEAU_DOMAIN_FULL']
-    try:
-        token, site_id = tableau_signin_with_jwt(user_regions)
-    except Exception as e:
-        print("Failed to sign in with JWT.")
-        return None
-
+    token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
     gql_url = f"{domain}/api/metadata/graphql"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -177,23 +116,12 @@ def lookup_published_datasource_metadata(datasource_name, user_regions):
         }}
         """
     }
-    try:
-        resp = requests.post(gql_url, json=query, headers=headers)
-        print(f"Metadata API status (filtered for '{datasource_name}'):", resp.status_code)
-        print("Metadata API response (filtered):", resp.text)
-        if resp.status_code == 200:
-            data = resp.json()
-            datasources = data.get("data", {}).get("publishedDatasources", [])
-            if datasources:
-                print(f"Found datasource with name '{datasource_name}':", datasources[0])
-                return datasources[0]
-            else:
-                print(f"No published data source found with the name '{datasource_name}'.")
-        else:
-            print(f"Metadata API error: {resp.status_code} - {resp.text}")
-    except Exception as e:
-        print("Exception during Metadata API call (filtered):")
-        traceback.print_exc()
+    resp = requests.post(gql_url, json=query, headers=headers)
+    if resp.status_code == 200:
+        data = resp.json()
+        datasources = data.get("data", {}).get("publishedDatasources", [])
+        if datasources:
+            return datasources[0]
     return None
 
 @app.post("/datasources")
@@ -202,52 +130,34 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
     first_name = next(iter(body.datasources.keys()))
-    print(f"Received data source request for: '{first_name}' from client: {client_id}")
-
-    # NEW: Get allowed regions for this user (replace this with real auth logic)
-    # For demo, you can pass regions in the request, or set them here per client_id.
-    # Example: USER_REGION_STORE[client_id] = ['East']  # Set this at login/session
-    user_regions = ['South', 'West']
+    user_regions = get_user_regions(client_id)
+    tableau_username = get_tableau_username(client_id)
     if not user_regions:
         raise HTTPException(status_code=403, detail="No region permissions found for this user.")
-
-    try:
-        log_all_published_datasources(user_regions)
-        ds_metadata = lookup_published_datasource_metadata(first_name, user_regions)
-        if not ds_metadata:
-            print(f"Datasource '{first_name}' not found after logging all datasources.")
-            raise HTTPException(
-                status_code=404,
-                detail=f"Datasource not found: {first_name}."
-            )
-        luid = ds_metadata["luid"]
-        print(f"Storing LUID '{luid}' for client '{client_id}'")
-        DATASOURCE_LUID_STORE[client_id] = luid
-        DATASOURCE_METADATA_STORE[client_id] = ds_metadata
-        return {"status": "ok", "selected_luid": luid}
-    except Exception as e:
-        print("Exception in receive_datasources endpoint:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error looking up datasource: {str(e)}")
+    ds_metadata = lookup_published_datasource_metadata(first_name, tableau_username, user_regions)
+    if not ds_metadata:
+        raise HTTPException(status_code=404, detail=f"Datasource not found: {first_name}.")
+    luid = ds_metadata["luid"]
+    DATASOURCE_LUID_STORE[client_id] = luid
+    DATASOURCE_METADATA_STORE[client_id] = ds_metadata
+    return {"status": "ok", "selected_luid": luid}
 
 def setup_agent(request: Request = None):
     client_id = request.client.host if request else None
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id) if client_id else os.environ.get('DATASOURCE_LUID', '')
-    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
-    user_regions = ["South", "West"]
-
-    print(f"Using datasource LUID: {datasource_luid}")
+    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
+    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
+    tableau_username = get_tableau_username(client_id)
+    user_regions = get_user_regions(client_id)
     if not datasource_luid:
         raise RuntimeError("No Tableau datasource LUID available.")
-
-    # Build dynamic prompt
+    if not tableau_username or not user_regions:
+        raise RuntimeError("User context missing.")
     if ds_metadata:
         agent_identity = build_agent_identity(ds_metadata)
         agent_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name", "this Tableau datasource"))
     else:
         from utilities.prompt import AGENT_SYSTEM_PROMPT
-        agent_prompt = AGENT_SYSTEM_PROMPT  # fallback
-
+        agent_prompt = AGENT_SYSTEM_PROMPT
     analyze_datasource = initialize_simple_datasource_qa(
         domain=os.environ['TABLEAU_DOMAIN_FULL'],
         site=os.environ['TABLEAU_SITE'],
@@ -255,15 +165,13 @@ def setup_agent(request: Request = None):
         jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
         jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
         tableau_api_version=os.environ['TABLEAU_API_VERSION'],
-        tableau_user=os.environ['TABLEAU_USER'],
+        tableau_user=tableau_username,
         datasource_luid=datasource_luid,
         tooling_llm_model="gpt-4.1-nano",
         model_provider="openai"
     )
-
     llm = ChatOpenAI(model="gpt-4.1", temperature=0)
     tools = [analyze_datasource]
-
     return create_react_agent(
         model=llm,
         tools=tools,
