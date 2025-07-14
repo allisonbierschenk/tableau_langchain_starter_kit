@@ -207,7 +207,7 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     # NEW: Get allowed regions for this user (replace this with real auth logic)
     # For demo, you can pass regions in the request, or set them here per client_id.
     # Example: USER_REGION_STORE[client_id] = ['East']  # Set this at login/session
-    user_regions = get_user_regions(client_id)
+    user_regions = ['South', 'West']
     if not user_regions:
         raise HTTPException(status_code=403, detail="No region permissions found for this user.")
 
@@ -234,7 +234,7 @@ def setup_agent(request: Request = None):
     client_id = request.client.host if request else None
     datasource_luid = DATASOURCE_LUID_STORE.get(client_id) if client_id else os.environ.get('DATASOURCE_LUID', '')
     ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
-    user_regions = get_user_regions(client_id) if client_id else []
+    user_regions = ["South", "West"]
 
     print(f"Using datasource LUID: {datasource_luid}")
     if not datasource_luid:
