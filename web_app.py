@@ -37,8 +37,15 @@ class DataSourcesRequest(BaseModel):
 
 DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
+USER_REGION_STORE = {}  # NEW: Store user regions per client
 
-def generate_jwt():
+def get_user_regions(client_id):
+    # This function should return the list of allowed regions for the current user.
+    # Replace this logic with your actual user-region lookup.
+    # For demo, we fetch from USER_REGION_STORE, but in production use your auth system.
+    return USER_REGION_STORE.get(client_id, [])
+
+def generate_jwt(user_regions):
     client_id = os.environ['TABLEAU_JWT_CLIENT_ID']
     secret_id = os.environ['TABLEAU_JWT_SECRET_ID']
     secret_value = os.environ['TABLEAU_JWT_SECRET']
@@ -52,7 +59,7 @@ def generate_jwt():
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
         "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
-        "Region": ['South', 'East']
+        "Region": user_regions  # ENFORCED: Set per-user region
     }
     headers = {
         "kid": secret_id,
@@ -61,12 +68,12 @@ def generate_jwt():
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
     return jwt_token
 
-def tableau_signin_with_jwt():
+def tableau_signin_with_jwt(user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
 
-    jwt_token = generate_jwt()
+    jwt_token = generate_jwt(user_regions)
     url = f"{domain}/api/{api_version}/auth/signin"
     headers = {
         'Content-Type': 'application/json',
@@ -91,13 +98,10 @@ def tableau_signin_with_jwt():
         traceback.print_exc()
         raise RuntimeError("Tableau REST API signin failed. Check your JWT and site.")
 
-def log_all_published_datasources():
-    """
-    Use Tableau Metadata API (GraphQL) to log all published data source names.
-    """
+def log_all_published_datasources(user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     try:
-        token, site_id = tableau_signin_with_jwt()
+        token, site_id = tableau_signin_with_jwt(user_regions)
     except Exception as e:
         print("Failed to sign in with JWT.")
         return None
@@ -137,13 +141,10 @@ def log_all_published_datasources():
         traceback.print_exc()
     return None
 
-def lookup_published_datasource_metadata(datasource_name):
-    """
-    Use Tableau Metadata API (GraphQL) to get metadata for a published data source by name.
-    """
+def lookup_published_datasource_metadata(datasource_name, user_regions):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     try:
-        token, site_id = tableau_signin_with_jwt()
+        token, site_id = tableau_signin_with_jwt(user_regions)
     except Exception as e:
         print("Failed to sign in with JWT.")
         return None
@@ -202,10 +203,17 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
         raise HTTPException(status_code=400, detail="No data sources provided")
     first_name = next(iter(body.datasources.keys()))
     print(f"Received data source request for: '{first_name}' from client: {client_id}")
+
+    # NEW: Get allowed regions for this user (replace this with real auth logic)
+    # For demo, you can pass regions in the request, or set them here per client_id.
+    # Example: USER_REGION_STORE[client_id] = ['East']  # Set this at login/session
+    user_regions = get_user_regions(client_id)
+    if not user_regions:
+        raise HTTPException(status_code=403, detail="No region permissions found for this user.")
+
     try:
-        # Log all published datasources for debugging
-        log_all_published_datasources()
-        ds_metadata = lookup_published_datasource_metadata(first_name)
+        log_all_published_datasources(user_regions)
+        ds_metadata = lookup_published_datasource_metadata(first_name, user_regions)
         if not ds_metadata:
             print(f"Datasource '{first_name}' not found after logging all datasources.")
             raise HTTPException(
@@ -226,6 +234,7 @@ def setup_agent(request: Request = None):
     client_id = request.client.host if request else None
     datasource_luid = DATASOURCE_LUID_STORE.get(client_id) if client_id else os.environ.get('DATASOURCE_LUID', '')
     ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
+    user_regions = get_user_regions(client_id) if client_id else []
 
     print(f"Using datasource LUID: {datasource_luid}")
     if not datasource_luid:
