@@ -104,6 +104,7 @@ def lookup_published_datasource_metadata(datasource_name, tableau_username, user
         "Accept": "application/json"
     }
     print(f"GET {url} with headers: {headers}")
+    print(f"DataSource to find: {datasource_name}")
     resp = requests.get(url, headers=headers)
     print(f"REST API datasources status: {resp.status_code}")
     if resp.status_code == 200:
@@ -135,6 +136,9 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     print(f"Received /datasources request from client: {client_id}")
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
+    print("Datasources sent from extension API (name -> LUID):")
+    for name, luid in body.datasources.items():
+        print(f"  Name: '{name}'  LUID: '{luid}'")
     first_name = next(iter(body.datasources.keys()))
     print(f"Datasource requested: {first_name}")
     user_regions = get_user_regions(client_id)
