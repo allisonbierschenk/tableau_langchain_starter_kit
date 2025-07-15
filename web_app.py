@@ -31,7 +31,7 @@ class ChatResponse(BaseModel):
     response: str
 
 class DataSourcesRequest(BaseModel):
-    datasources: dict  # { "name": "luid" }
+    datasources: dict  # { "name": "federated_id" }
 
 DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
@@ -61,9 +61,8 @@ def generate_jwt(tableau_username, user_regions):
         "iss": client_id
     }
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
-    print("\n=== GENERATED JWT ===")
+    print("\n🔐 JWT generated for Tableau API")
     print(jwt_token)
-    print("=====================\n")
     return jwt_token
 
 def tableau_signin_with_jwt(tableau_username, user_regions):
@@ -71,7 +70,6 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
     jwt_token = generate_jwt(tableau_username, user_regions)
-    print(f"Using JWT for Tableau sign-in: {jwt_token}")
     url = f"{domain}/api/{api_version}/auth/signin"
     headers = {
         'Content-Type': 'application/json',
@@ -83,50 +81,76 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
             "site": {"contentUrl": site}
         }
     }
-    print(f"POST {url} with payload: {payload}")
+    print(f"\n🔑 Signing in to Tableau REST API at {url}")
     resp = requests.post(url, json=payload, headers=headers)
-    print(f"REST API signin status: {resp.status_code}")
-    print(f"REST API signin response: {resp.text}")
+    print(f"🔁 Sign-in response code: {resp.status_code}")
+    print(f"📨 Sign-in response: {resp.text}")
     resp.raise_for_status()
     token = resp.json()['credentials']['token']
     site_id = resp.json()['credentials']['site']['id']
-    print(f"Received token: {token}")
-    print(f"Site ID: {site_id}")
+    print(f"✅ Tableau REST API token: {token}")
+    print(f"✅ Site ID: {site_id}")
     return token, site_id
+
+def lookup_published_luid_by_name(name, tableau_username, user_regions):
+    token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
+    domain = os.environ['TABLEAU_DOMAIN_FULL']
+    api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
+    url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
+    headers = {
+        "X-Tableau-Auth": token,
+        "Accept": "application/json"
+    }
+    print(f"\n🔍 Looking up published LUID for datasource name: '{name}'")
+    resp = requests.get(url, headers=headers)
+    print(f"🔁 Datasources fetch response code: {resp.status_code}")
+    resp.raise_for_status()
+    datasources = resp.json().get("datasources", {}).get("datasource", [])
+    for ds in datasources:
+        print(f"🔎 Checking datasource: {ds.get('name')} ➜ LUID: {ds.get('id')}")
+        if ds.get("name", "").lower() == name.lower():
+            print(f"✅ Match found for '{name}' ➜ Published LUID: {ds['id']}")
+            return ds["id"], ds
+    print(f"❌ No match found for datasource name: {name}")
+    raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
 
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
     client_id = request.client.host
-    print(f"\n📥 Received /datasources request from client: {client_id}")
+    print(f"\n📥 /datasources request from client: {client_id}")
     
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
 
-    print("📦 Datasources sent from Tableau Extensions API (name ➜ LUID):")
-    for name, luid in body.datasources.items():
-        print(f"   - Name: '{name}' ➜ LUID: '{luid}'")
+    print("📦 Datasources received from Tableau Extensions API (name ➜ federated ID):")
+    for name, fed_id in body.datasources.items():
+        print(f"   - Name: '{name}' ➜ Federated ID: '{fed_id}'")
 
-    # Use the first datasource in the dictionary
-    first_name, first_luid = next(iter(body.datasources.items()))
-    print(f"✅ Using LUID from extension: {first_luid} (for datasource: '{first_name}')")
+    # Use the first datasource
+    first_name, _ = next(iter(body.datasources.items()))
+    print(f"\n🎯 Targeting first datasource: '{first_name}'")
 
     user_regions = get_user_regions(client_id)
     tableau_username = get_tableau_username(client_id)
     print(f"👤 Tableau username: {tableau_username}")
     print(f"🌍 User regions: {user_regions}")
 
-    if not user_regions:
-        raise HTTPException(status_code=403, detail="No region permissions found for this user.")
+    # Look up the real LUID using the name
+    published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
 
-    # Store the LUID and minimal metadata
-    DATASOURCE_LUID_STORE[client_id] = first_luid
+    # Store the real LUID and metadata
+    DATASOURCE_LUID_STORE[client_id] = published_luid
     DATASOURCE_METADATA_STORE[client_id] = {
         "name": first_name,
-        "luid": first_luid
+        "luid": published_luid,
+        "projectName": full_metadata.get("projectName"),
+        "description": full_metadata.get("description"),
+        "uri": full_metadata.get("contentUrl"),
+        "owner": full_metadata.get("owner", {})
     }
 
-    print(f"✅ Stored LUID for client {client_id}: {first_luid}\n")
-    return {"status": "ok", "selected_luid": first_luid}
+    print(f"✅ Stored published LUID for client {client_id}: {published_luid}\n")
+    return {"status": "ok", "selected_luid": published_luid}
 
 def setup_agent(request: Request = None):
     client_id = request.client.host if request else None
@@ -136,9 +160,13 @@ def setup_agent(request: Request = None):
     user_regions = get_user_regions(client_id)
 
     if not datasource_luid:
-        raise RuntimeError("No Tableau datasource LUID available.")
+        raise RuntimeError("❌ No Tableau datasource LUID available.")
     if not tableau_username or not user_regions:
-        raise RuntimeError("User context missing.")
+        raise RuntimeError("❌ User context missing.")
+
+    print(f"\n🤖 Setting up agent for client {client_id}")
+    print(f"📊 Datasource LUID: {datasource_luid}")
+    print(f"📘 Datasource Name: {ds_metadata.get('name')}")
 
     if ds_metadata:
         agent_identity = build_agent_identity(ds_metadata)
@@ -189,6 +217,8 @@ def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
             detail="Datasource not initialized yet. Please wait for datasource detection to complete."
         )
     try:
+        print(f"\n💬 Chat request from client {client_id}")
+        print(f"🧠 Message: {request.message}")
         agent = setup_agent(fastapi_request)
         messages = {"messages": [("user", request.message)]}
         response_text = ""
@@ -197,6 +227,7 @@ def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
                 latest_message = chunk['messages'][-1]
                 if hasattr(latest_message, 'content'):
                     response_text = latest_message.content
+        print(f"🤖 Response: {response_text}")
         return ChatResponse(response=response_text)
     except Exception as e:
         print("❌ Error in /chat endpoint:")
