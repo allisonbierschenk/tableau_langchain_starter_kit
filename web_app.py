@@ -31,7 +31,7 @@ class ChatResponse(BaseModel):
     response: str
 
 class DataSourcesRequest(BaseModel):
-    datasources: dict
+    datasources: dict  # { "name": "luid" }
 
 DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
@@ -94,66 +94,39 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     print(f"Site ID: {site_id}")
     return token, site_id
 
-def lookup_published_datasource_metadata(datasource_name, tableau_username, user_regions):
-    domain = os.environ['TABLEAU_DOMAIN_FULL']
-    api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
-    token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
-    url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
-    headers = {
-        "X-Tableau-Auth": token,
-        "Accept": "application/json"
-    }
-    print(f"GET {url} with headers: {headers}")
-    print(f"DataSource to find: {datasource_name}")
-    resp = requests.get(url, headers=headers)
-    print(f"REST API datasources status: {resp.status_code}")
-    if resp.status_code == 200:
-        datasources = resp.json().get("datasources", {}).get("datasource", [])
-        print(f"Datasources received: {datasources}")
-        for ds in datasources:
-            if ds.get("name", "").lower() == datasource_name.lower():
-                print(f"Found datasource: {ds}")
-                return {
-                    "name": ds.get("name"),
-                    "projectName": ds.get("projectName"),
-                    "description": ds.get("description"),
-                    "luid": ds.get("id"),
-                    "uri": ds.get("contentUrl"),
-                    "owner": ds.get("owner", {}),
-                    "hasActiveWarning": None,
-                    "extractLastRefreshTime": None,
-                    "extractLastIncrementalUpdateTime": None,
-                    "extractLastUpdateTime": None
-                }
-        print("Datasource not found in REST API response.")
-    else:
-        print(f"REST API error: {resp.status_code} - {resp.text}")
-    return None
-
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
     client_id = request.client.host
-    print(f"Received /datasources request from client: {client_id}")
+    print(f"\n📥 Received /datasources request from client: {client_id}")
+    
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
-    print("Datasources sent from extension API (name -> LUID):")
+
+    print("📦 Datasources sent from Tableau Extensions API (name ➜ LUID):")
     for name, luid in body.datasources.items():
-        print(f"  Name: '{name}'  LUID: '{luid}'")
-    first_name = next(iter(body.datasources.keys()))
-    print(f"Datasource requested: {first_name}")
+        print(f"   - Name: '{name}' ➜ LUID: '{luid}'")
+
+    # Use the first datasource in the dictionary
+    first_name, first_luid = next(iter(body.datasources.items()))
+    print(f"✅ Using LUID from extension: {first_luid} (for datasource: '{first_name}')")
+
     user_regions = get_user_regions(client_id)
     tableau_username = get_tableau_username(client_id)
-    print(f"User regions: {user_regions}, Tableau username: {tableau_username}")
+    print(f"👤 Tableau username: {tableau_username}")
+    print(f"🌍 User regions: {user_regions}")
+
     if not user_regions:
         raise HTTPException(status_code=403, detail="No region permissions found for this user.")
-    ds_metadata = lookup_published_datasource_metadata(first_name, tableau_username, user_regions)
-    if not ds_metadata:
-        raise HTTPException(status_code=404, detail=f"Datasource not found: {first_name}.")
-    luid = ds_metadata["luid"]
-    DATASOURCE_LUID_STORE[client_id] = luid
-    DATASOURCE_METADATA_STORE[client_id] = ds_metadata
-    print(f"Stored LUID for client {client_id}: {luid}")
-    return {"status": "ok", "selected_luid": luid}
+
+    # Store the LUID and minimal metadata
+    DATASOURCE_LUID_STORE[client_id] = first_luid
+    DATASOURCE_METADATA_STORE[client_id] = {
+        "name": first_name,
+        "luid": first_luid
+    }
+
+    print(f"✅ Stored LUID for client {client_id}: {first_luid}\n")
+    return {"status": "ok", "selected_luid": first_luid}
 
 def setup_agent(request: Request = None):
     client_id = request.client.host if request else None
@@ -161,16 +134,19 @@ def setup_agent(request: Request = None):
     ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
     tableau_username = get_tableau_username(client_id)
     user_regions = get_user_regions(client_id)
+
     if not datasource_luid:
         raise RuntimeError("No Tableau datasource LUID available.")
     if not tableau_username or not user_regions:
         raise RuntimeError("User context missing.")
+
     if ds_metadata:
         agent_identity = build_agent_identity(ds_metadata)
         agent_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name", "this Tableau datasource"))
     else:
         from utilities.prompt import AGENT_SYSTEM_PROMPT
         agent_prompt = AGENT_SYSTEM_PROMPT
+
     analyze_datasource = initialize_simple_datasource_qa(
         domain=os.environ['TABLEAU_DOMAIN_FULL'],
         site=os.environ['TABLEAU_SITE'],
@@ -183,6 +159,7 @@ def setup_agent(request: Request = None):
         tooling_llm_model="gpt-4.1-nano",
         model_provider="openai"
     )
+
     llm = ChatOpenAI(model="gpt-4.1", temperature=0)
     tools = [analyze_datasource]
     return create_react_agent(
@@ -222,7 +199,7 @@ def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
                     response_text = latest_message.content
         return ChatResponse(response=response_text)
     except Exception as e:
-        print("Error in /chat endpoint:")
+        print("❌ Error in /chat endpoint:")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
