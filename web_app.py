@@ -92,6 +92,7 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     print(f"✅ Site ID: {site_id}")
     return token, site_id
 
+# ✅ Updated to use Tableau REST API filtering
 def lookup_published_luid_by_name(name, tableau_username, user_regions):
     token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
     domain = os.environ['TABLEAU_DOMAIN_FULL']
@@ -101,18 +102,24 @@ def lookup_published_luid_by_name(name, tableau_username, user_regions):
         "X-Tableau-Auth": token,
         "Accept": "application/json"
     }
-    print(f"\n🔍 Looking up published LUID for datasource name: '{name}'")
-    resp = requests.get(url, headers=headers)
-    print(f"🔁 Datasources fetch response code: {resp.status_code}")
+    params = {
+        "filter": f"name:eq:{name}"
+    }
+
+    print(f"\n🔍 Looking up datasource by name using filter: '{name}'")
+    resp = requests.get(url, headers=headers, params=params)
+    print(f"🔁 Datasource fetch response code: {resp.status_code}")
+    print(f"📨 Response: {resp.text}")
     resp.raise_for_status()
+
     datasources = resp.json().get("datasources", {}).get("datasource", [])
-    for ds in datasources:
-        print(f"🔎 Checking datasource: {ds.get('name')} ➜ LUID: {ds.get('id')}")
-        if ds.get("name", "").lower() == name.lower():
-            print(f"✅ Match found for '{name}' ➜ Published LUID: {ds['id']}")
-            return ds["id"], ds
-    print(f"❌ No match found for datasource name: {name}")
-    raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
+    if not datasources:
+        print(f"❌ No match found for datasource name: {name}")
+        raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
+
+    ds = datasources[0]
+    print(f"✅ Match found ➜ Name: {ds.get('name')} ➜ LUID: {ds.get('id')}")
+    return ds["id"], ds
 
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
@@ -126,7 +133,6 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     for name, fed_id in body.datasources.items():
         print(f"   - Name: '{name}' ➜ Federated ID: '{fed_id}'")
 
-    # Use the first datasource
     first_name, _ = next(iter(body.datasources.items()))
     print(f"\n🎯 Targeting first datasource: '{first_name}'")
 
@@ -135,10 +141,8 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     print(f"👤 Tableau username: {tableau_username}")
     print(f"🌍 User regions: {user_regions}")
 
-    # Look up the real LUID using the name
     published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
 
-    # Store the real LUID and metadata
     DATASOURCE_LUID_STORE[client_id] = published_luid
     DATASOURCE_METADATA_STORE[client_id] = {
         "name": first_name,
