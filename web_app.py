@@ -76,7 +76,20 @@ class MCPClient:
                 timeout=30
             )
             response.raise_for_status()
-            response_data = response.json()  # Parse JSON response
+            
+            # Handle Server-Sent Events format
+            response_text = response.text.strip()
+            logger.info(f"Raw response: {response_text}")
+            
+            # Parse SSE format: "event: message\ndata: {...}"
+            if response_text.startswith('event: message\ndata: '):
+                json_part = response_text.split('data: ', 1)[1]
+                response_data = json.loads(json_part)
+            else:
+                # Fallback to regular JSON parsing
+                response_data = response.json()
+            
+            logger.info(f"Parsed response: {json.dumps(response_data, indent=2)}")
             
             if 'error' in response_data:
                 error_message = response_data['error'].get('message', 'Unknown error')
