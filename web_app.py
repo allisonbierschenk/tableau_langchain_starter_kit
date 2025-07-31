@@ -9,8 +9,8 @@ import traceback
 import uuid
 from typing import Type, Any
 import logging
-import jwt # <-- Added
-import datetime # <-- Added
+import jwt
+import datetime
 
 # LangChain Imports
 from langsmith import Client
@@ -230,11 +230,22 @@ def setup_agent(request: Request = None):
         logger.info(f"Fetching tools from MCP server at {mcp_server_url}")
         try:
             list_tools_payload = {"jsonrpc": "2.0", "method": "listTools", "id": str(uuid.uuid4())}
+            ndjson_payload = json.dumps(list_tools_payload) + '\n'
+
+                # 2. Set headers for NDJSON content type for both sending and receiving.
             headers = {
-                    'Accept': 'application/x-ndjson', # Change this from 'application/json'
+                    'Content-Type': 'application/x-ndjson',
+                    'Accept': 'application/x-ndjson',
                     'MCP-Protocol-Version': '0.1.0'
-                }           
-            resp = requests.post(mcp_server_url, json=list_tools_payload, headers=headers, timeout=20)
+                }
+
+                # 3. Use the 'data' parameter to send the raw NDJSON string, not the 'json' parameter.
+            resp = requests.post(
+                    mcp_server_url,
+                    data=ndjson_payload.encode('utf-8'), # Encode the string to bytes
+                    headers=headers,
+                    timeout=20
+                )
             resp.raise_for_status()
             available_tools_data = resp.json()['result']['tools']
         except requests.exceptions.RequestException as e:
