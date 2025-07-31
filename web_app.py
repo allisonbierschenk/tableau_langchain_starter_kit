@@ -230,7 +230,8 @@ def setup_agent(request: Request = None):
         logger.info(f"Fetching tools from MCP server at {mcp_server_url}")
         try:
             list_tools_payload = {"jsonrpc": "2.0", "method": "listTools", "id": str(uuid.uuid4())}
-            resp = requests.post(mcp_server_url, json=list_tools_payload, timeout=20)
+            headers = {'Accept': 'application/json'}
+            resp = requests.post(mcp_server_url, json=list_tools_payload, headers=headers, timeout=20)
             resp.raise_for_status()
             available_tools_data = resp.json()['result']['tools']
         except requests.exceptions.RequestException as e:
