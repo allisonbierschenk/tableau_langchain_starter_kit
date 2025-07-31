@@ -196,15 +196,8 @@ def setup_agent(client: MCPClient, ds_metadata: Dict):
         system_prompt = (f"You are a helpful assistant for the Tableau datasource named '{ds_metadata.get('name', 'N/A')}'. "
                          f"Description: '{ds_metadata.get('description', 'N/A')}'. Use your tools to answer questions.")
 
-        # Use the correct approach for current LangChain versions
-        from langchain_core.messages import SystemMessage
-        
-        # Create the agent with system message in the messages list
-        return create_react_agent(
-            model=llm, 
-            tools=tools,
-            messages=[SystemMessage(content=system_prompt)]
-        )
+        # Use the basic approach that works with older LangChain versions
+        return create_react_agent(llm, tools)
     except Exception as e:
         logger.error(f"Error setting up agent: {e}")
         # Re-raise to be caught by the chat endpoint
