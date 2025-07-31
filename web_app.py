@@ -52,9 +52,9 @@ class MCPClient:
         self._server_url = server_url
         self._session = requests.Session()
         self._session.headers.update({
-            'Content-Type': 'application/x-ndjson',  # Keeping your working format
-            'Accept': 'application/x-ndjson',
-            'MCP-Protocol-Version': '0.1.0'  # Keeping your working version
+            'Content-Type': 'application/json',  # Changed from x-ndjson
+            'Accept': 'application/json, text/event-stream',  # Server requires both
+            'MCP-Protocol-Version': '0.1.0'
         })
         logger.info(f"MCP Client initialized for {server_url}")
 
@@ -66,14 +66,17 @@ class MCPClient:
         
         ndjson_payload = json.dumps(payload) + '\n'
         
+        logger.info(f"Sending MCP request to URL: {self._server_url}")
+        logger.info(f"Request payload: {json.dumps(payload, indent=2)}")
+        
         try:
             response = self._session.post(
                 self._server_url,
-                data=ndjson_payload.encode('utf-8'),
+                json=payload,  # Use json instead of raw data
                 timeout=30
             )
             response.raise_for_status()
-            response_data = json.loads(response.text.strip())
+            response_data = response.json()  # Parse JSON response
             
             if 'error' in response_data:
                 error_message = response_data['error'].get('message', 'Unknown error')
@@ -90,30 +93,36 @@ class MCPClient:
         """
         logger.info("Connecting to MCP server with handshake...")
         connect_params = {
-            "name": "langchain-python-client",
-            "version": "0.1.0",
+            "protocolVersion": "2024-11-05",
             "capabilities": {
                 "tools": {}
+            },
+            "clientInfo": {
+                "name": "langchain-python-client",
+                "version": "0.1.0"
             }
         }
-        # This call officially establishes the session.
-        self._send_request(method="connect", params=connect_params)
+        # Use the correct MCP method name
+        result = self._send_request(method="initialize", params=connect_params)
         logger.info("MCP handshake successful.")
+        return result
 
     def list_tools(self) -> Dict:
         """Fetches the list of available tools from the server."""
         logger.info("Fetching tools from MCP server...")
-        return self._send_request(method="listTools")
+        return self._send_request(method="tools/list")
 
     def call_tool(self, tool_name: str, arguments: Dict, context: Dict) -> Dict:
         """Calls a specific tool on the server."""
         logger.info(f"Calling MCP Tool '{tool_name}' with args: {arguments}")
         params = {
             "name": tool_name,
-            "arguments": arguments,
-            "context": context
+            "arguments": arguments
         }
-        return self._send_request(method="callTool", params=params)
+        # Add context if provided
+        if context:
+            params["context"] = context
+        return self._send_request(method="tools/call", params=params)
 
     def close(self):
         """Closes the session."""
@@ -191,7 +200,8 @@ async def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
 
     logger.info(f"Chat request from client {client_id}: '{request.message}'")
     
-    mcp_server_url = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/"
+    # The endpoint needs to match your Express server's basePath
+    mcp_server_url = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
     mcp_client = MCPClient(server_url=mcp_server_url)
 
     try:
