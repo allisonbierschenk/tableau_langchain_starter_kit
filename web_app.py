@@ -191,7 +191,7 @@ async def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
 
     logger.info(f"Chat request from client {client_id}: '{request.message}'")
     
-    mcp_server_url = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
+    mcp_server_url = "https://git.heroku.com/tableau-mcp-bierschenk.git"
     mcp_client = MCPClient(server_url=mcp_server_url)
 
     try:
