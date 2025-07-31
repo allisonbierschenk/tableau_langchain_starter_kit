@@ -77,7 +77,7 @@ def generate_jwt(tableau_username):
         "aud": "tableau",
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
-        "scp": ["tableau:rest_api:read", "tableau:datasources:query"] # Updated scopes
+        "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
     }
     headers = {"kid": secret_id, "iss": client_id}
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
@@ -101,7 +101,7 @@ def tableau_signin_with_jwt(tableau_username):
 def lookup_published_luid_by_name(name, tableau_username):
     token, site_id = tableau_signin_with_jwt(tableau_username)
     domain = os.environ['TABLEAU_DOMAIN_FULL']
-    api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
+    api_version = os.environ.get('TABLEAU_API_VERSION', '3.26')
     url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
     headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
     params = {"filter": f"name:eq:{name}"}
