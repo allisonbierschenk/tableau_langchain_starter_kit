@@ -1,29 +1,52 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field, create_model
 import os
 from dotenv import load_dotenv
 import requests
 import traceback
-import jwt
-import datetime
 import uuid
+from typing import Type, Any
+import logging
+import jwt # <-- Added
+import datetime # <-- Added
 
+# LangChain Imports
 from langsmith import Client
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
-from utilities.prompt import build_agent_identity, build_agent_system_prompt
+from langchain.tools import BaseTool
 
+# Configure logging for better debugging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- Initial Setup ---
 load_dotenv()
 
-langsmith_client = Client()
-config = {"run_name": "Tableau Langchain Web_App.py"}
+# Initialize LangSmith client
+try:
+    langsmith_client = Client()
+    config = {"run_name": "Tableau MCP Langchain Web_App.py"}
+except Exception as e:
+    logger.warning(f"LangSmith client initialization failed: {e}")
+    langsmith_client = None
+    config = {}
 
 app = FastAPI(title="Tableau AI Chat", description="Simple AI chat interface for Tableau data")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Mount static files
+try:
+    if os.path.exists("static"):
+        app.mount("/static", StaticFiles(directory="static"), name="static")
+    else:
+        logger.warning("Static directory not found, skipping static file mounting")
+except Exception as e:
+    logger.warning(f"Could not mount static files: {e}")
+
+
+# --- Pydantic Models ---
 class ChatRequest(BaseModel):
     message: str
 
@@ -33,16 +56,17 @@ class ChatResponse(BaseModel):
 class DataSourcesRequest(BaseModel):
     datasources: dict  # { "name": "federated_id" }
 
-DATASOURCE_LUID_STORE = {}
-DATASOURCE_METADATA_STORE = {}
 
-def get_user_regions(client_id):
-    return ['West', 'South']
+# --- In-Memory Stores ---
+DATASOURCE_METADATA_STORE = {} # This will now hold the name, LUID, and other metadata.
 
+
+# --- Tableau REST API Helper Functions (from old code) ---
 def get_tableau_username(client_id):
+    # Using a fixed username from environment variables for simplicity
     return os.environ['TABLEAU_USER']
 
-def generate_jwt(tableau_username, user_regions):
+def generate_jwt(tableau_username):
     client_id = os.environ['TABLEAU_JWT_CLIENT_ID']
     secret_id = os.environ['TABLEAU_JWT_SECRET_ID']
     secret_value = os.environ['TABLEAU_JWT_SECRET']
@@ -53,192 +77,240 @@ def generate_jwt(tableau_username, user_regions):
         "aud": "tableau",
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
-        "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
-        "Region": user_regions
+        "scp": ["tableau:rest_api:read", "tableau:datasources:query"] # Updated scopes
     }
-    headers = {
-        "kid": secret_id,
-        "iss": client_id
-    }
+    headers = {"kid": secret_id, "iss": client_id}
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
-    print("\n🔐 JWT generated for Tableau API")
-    print(jwt_token)
+    logger.info("JWT generated for Tableau API")
     return jwt_token
 
-def tableau_signin_with_jwt(tableau_username, user_regions):
+def tableau_signin_with_jwt(tableau_username):
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
-    jwt_token = generate_jwt(tableau_username, user_regions)
+    jwt_token = generate_jwt(tableau_username)
     url = f"{domain}/api/{api_version}/auth/signin"
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    payload = {
-        "credentials": {
-            "jwt": jwt_token,
-            "site": {"contentUrl": site}
-        }
-    }
-    print(f"\n🔑 Signing in to Tableau REST API at {url}")
-    resp = requests.post(url, json=payload, headers=headers)
-    print(f"🔁 Sign-in response code: {resp.status_code}")
-    print(f"📨 Sign-in response: {resp.text}")
+    payload = { "credentials": { "jwt": jwt_token, "site": {"contentUrl": site} } }
+    logger.info(f"Signing in to Tableau REST API as '{tableau_username}'")
+    resp = requests.post(url, json=payload, headers={'Accept': 'application/json'}, timeout=20)
     resp.raise_for_status()
-    token = resp.json()['credentials']['token']
-    site_id = resp.json()['credentials']['site']['id']
-    print(f"✅ Tableau REST API token: {token}")
-    print(f"✅ Site ID: {site_id}")
-    return token, site_id
+    creds = resp.json()['credentials']
+    logger.info(f"Sign-in successful. Site ID: {creds['site']['id']}")
+    return creds['token'], creds['site']['id']
 
-# ✅ Updated to use Tableau REST API filtering
-def lookup_published_luid_by_name(name, tableau_username, user_regions):
-    token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
+def lookup_published_luid_by_name(name, tableau_username):
+    token, site_id = tableau_signin_with_jwt(tableau_username)
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
-    headers = {
-        "X-Tableau-Auth": token,
-        "Accept": "application/json"
-    }
-    params = {
-        "filter": f"name:eq:{name}"
-    }
+    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
+    params = {"filter": f"name:eq:{name}"}
 
-    print(f"\n🔍 Looking up datasource by name using filter: '{name}'")
-    resp = requests.get(url, headers=headers, params=params)
-    print(f"🔁 Datasource fetch response code: {resp.status_code}")
-    print(f"📨 Response: {resp.text}")
+    logger.info(f"Looking up datasource by name using filter: '{name}'")
+    resp = requests.get(url, headers=headers, params=params, timeout=20)
     resp.raise_for_status()
 
     datasources = resp.json().get("datasources", {}).get("datasource", [])
     if not datasources:
-        print(f"❌ No match found for datasource name: {name}")
+        logger.error(f"No match found for datasource name: {name}")
         raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
 
     ds = datasources[0]
-    print(f"✅ Match found ➜ Name: {ds.get('name')} ➜ LUID: {ds.get('id')}")
+    logger.info(f"Match found -> Name: {ds.get('name')}, LUID: {ds.get('id')}")
     return ds["id"], ds
+
+
+# --- Custom LangChain Tool for MCP Server ---
+class MCPTool(BaseTool):
+    """A tool to dynamically call any method on the remote MCP server."""
+    server_url: str
+    tool_name: str
+    datasource_luid: str # <-- MODIFICATION: Add LUID to the tool's state
+
+    def _run(self, **kwargs: Any) -> Any:
+        """Use the tool and pass the datasource_luid as context."""
+        logger.info(f"Calling MCP Tool '{self.tool_name}' for datasource '{self.datasource_luid}' with args: {kwargs}")
+
+        # MODIFICATION: Add a 'context' key to the payload
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "callTool",
+            "params": {
+                "name": self.tool_name,
+                "arguments": kwargs,
+                "context": {
+                    "datasource_luid": self.datasource_luid
+                }
+            },
+            "id": str(uuid.uuid4())
+        }
+
+        try:
+            response = requests.post(self.server_url, json=payload, timeout=30)
+            response.raise_for_status()
+            
+            result = response.json()
+            if 'error' in result:
+                error_message = result['error'].get('message', 'Unknown error')
+                logger.error(f"MCP server returned an error: {error_message}")
+                return f"Error from MCP server: {error_message}"
+                
+            return result.get('result', {}).get('content', '')
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to call MCP server: {e}")
+            return f"Error: Could not connect to the MCP tool server at {self.server_url}."
+
+
+# --- API Endpoints ---
+@app.get("/", include_in_schema=False)
+async def home():
+    """Serves the frontend application."""
+    static_file_path = 'static/index.html'
+    if os.path.exists(static_file_path):
+        return FileResponse(static_file_path)
+    return JSONResponse({"message": "Tableau AI Chat API is running."})
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
 
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
-    client_id = request.client.host
-    print(f"\n📥 /datasources request from client: {client_id}")
+    """
+    Receives datasource name from the Tableau Extension, looks up its LUID via Tableau REST API,
+    and stores it for the user session.
+    """
+    try:
+        client_id = request.client.host
+        logger.info(f"Datasources request from client: {client_id}")
+        
+        if not body.datasources:
+            raise HTTPException(status_code=400, detail="No data sources provided")
+
+        first_name, _ = next(iter(body.datasources.items()))
+        logger.info(f"Targeting first datasource: '{first_name}'")
+
+        # --- MODIFICATION: Perform LUID lookup ---
+        tableau_username = get_tableau_username(client_id)
+        published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username)
+
+        # Store all relevant metadata, including the LUID
+        DATASOURCE_METADATA_STORE[client_id] = {
+            "name": first_name,
+            "luid": published_luid, # <-- The crucial LUID is now stored
+            "projectName": full_metadata.get("projectName"),
+            "description": full_metadata.get("description"),
+            "owner_name": full_metadata.get("owner", {}).get("name")
+        }
+
+        logger.info(f"Stored datasource context for client {client_id}: Name='{first_name}', LUID='{published_luid}'")
+        return {"status": "ok", "selected_datasource_name": first_name, "selected_datasource_luid": published_luid}
     
-    if not body.datasources:
-        raise HTTPException(status_code=400, detail="No data sources provided")
+    except Exception as e:
+        logger.error(f"Error in /datasources endpoint: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
-    print("📦 Datasources received from Tableau Extensions API (name ➜ federated ID):")
-    for name, fed_id in body.datasources.items():
-        print(f"   - Name: '{name}' ➜ Federated ID: '{fed_id}'")
-
-    first_name, _ = next(iter(body.datasources.items()))
-    print(f"\n🎯 Targeting first datasource: '{first_name}'")
-
-    user_regions = get_user_regions(client_id)
-    tableau_username = get_tableau_username(client_id)
-    print(f"👤 Tableau username: {tableau_username}")
-    print(f"🌍 User regions: {user_regions}")
-
-    published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
-
-    DATASOURCE_LUID_STORE[client_id] = published_luid
-    DATASOURCE_METADATA_STORE[client_id] = {
-        "name": first_name,
-        "luid": published_luid,
-        "projectName": full_metadata.get("projectName"),
-        "description": full_metadata.get("description"),
-        "uri": full_metadata.get("contentUrl"),
-        "owner": full_metadata.get("owner", {})
-    }
-
-    print(f"✅ Stored published LUID for client {client_id}: {published_luid}\n")
-    return {"status": "ok", "selected_luid": published_luid}
 
 def setup_agent(request: Request = None):
-    client_id = request.client.host if request else None
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
-    tableau_username = get_tableau_username(client_id)
-    user_regions = get_user_regions(client_id)
+    """Sets up the LangChain agent to use the MCP server tools with the correct datasource context."""
+    try:
+        client_id = request.client.host if request else None
+        ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
 
-    if not datasource_luid:
-        raise RuntimeError("❌ No Tableau datasource LUID available.")
-    if not tableau_username or not user_regions:
-        raise RuntimeError("❌ User context missing.")
+        if not ds_metadata or 'luid' not in ds_metadata:
+            raise RuntimeError("No Tableau datasource context (including LUID) available. Please connect via the extension first.")
 
-    print(f"\n🤖 Setting up agent for client {client_id}")
-    print(f"📊 Datasource LUID: {datasource_luid}")
-    print(f"📘 Datasource Name: {ds_metadata.get('name')}")
+        datasource_luid = ds_metadata['luid'] # <-- Get the LUID from the store
+        logger.info(f"Setting up agent for client {client_id} with Datasource LUID: {datasource_luid}")
 
-    if ds_metadata:
-        agent_identity = build_agent_identity(ds_metadata)
-        agent_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name", "this Tableau datasource"))
-    else:
-        from utilities.prompt import AGENT_SYSTEM_PROMPT
-        agent_prompt = AGENT_SYSTEM_PROMPT
+        mcp_server_url = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
+        
+        logger.info(f"Fetching tools from MCP server at {mcp_server_url}")
+        try:
+            list_tools_payload = {"jsonrpc": "2.0", "method": "listTools", "id": str(uuid.uuid4())}
+            resp = requests.post(mcp_server_url, json=list_tools_payload, timeout=20)
+            resp.raise_for_status()
+            available_tools_data = resp.json()['result']['tools']
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Could not connect to MCP server to get tools: {e}")
 
-    analyze_datasource = initialize_simple_datasource_qa(
-        domain=os.environ['TABLEAU_DOMAIN_FULL'],
-        site=os.environ['TABLEAU_SITE'],
-        jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
-        jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
-        jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
-        tableau_api_version=os.environ['TABLEAU_API_VERSION'],
-        tableau_user=tableau_username,
-        datasource_luid=datasource_luid,
-        tooling_llm_model="gpt-4.1-nano",
-        model_provider="openai"
-    )
+        tools = []
+        for tool_data in available_tools_data:
+            tool_name = tool_data['name']
+            tool_description = tool_data['description']
+            
+            # Dynamically create Pydantic model for tool arguments
+            fields = {
+                prop_name: (
+                    str, # Default to string, can be enhanced
+                    Field(..., description=prop_details.get('description', ''))
+                )
+                for prop_name, prop_details in tool_data.get('inputSchema', {}).get('properties', {}).items()
+            }
+            args_schema = create_model(f'{tool_name}Args', **fields) if fields else BaseModel
 
-    llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-    tools = [analyze_datasource]
-    return create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=agent_prompt
-    )
+            # --- MODIFICATION: Pass the LUID to the tool instance ---
+            mcp_tool = MCPTool(
+                server_url=mcp_server_url,
+                tool_name=tool_name,
+                datasource_luid=datasource_luid, # <-- Inject the LUID here
+                name=tool_name,
+                description=tool_description,
+                args_schema=args_schema
+            )
+            tools.append(mcp_tool)
 
-@app.get("/")
-def home():
-    return FileResponse('static/index.html')
+        logger.info(f"Created {len(tools)} tools with LUID '{datasource_luid}': {[t.name for t in tools]}")
+        
+        llm = ChatOpenAI(model="gpt-4", temperature=0)
+        system_prompt = (f"You are a helpful assistant for analyzing data from the Tableau datasource named '{ds_metadata.get('name', 'N/A')}'. "
+                         f"The datasource is described as: '{ds_metadata.get('description', 'No description available.')}'. "
+                         "Use your available tools to answer questions.")
 
-@app.get("/index.html")
-def static_index():
-    return FileResponse('static/index.html')
+        return create_react_agent(model=llm, tools=tools, messages_modifier=system_prompt)
+    
+    except Exception as e:
+        logger.error(f"Error setting up agent: {e}")
+        raise
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
 
 @app.post("/chat")
-def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
-    client_id = fastapi_request.client.host
-    if client_id not in DATASOURCE_LUID_STORE or not DATASOURCE_LUID_STORE[client_id]:
-        raise HTTPException(
-            status_code=400,
-            detail="Datasource not initialized yet. Please wait for datasource detection to complete."
-        )
+async def chat(request: ChatRequest, fastapi_request: Request) -> ChatResponse:
+    """Main chat endpoint that invokes the LangChain agent."""
     try:
-        print(f"\n💬 Chat request from client {client_id}")
-        print(f"🧠 Message: {request.message}")
+        client_id = fastapi_request.client.host
+        if client_id not in DATASOURCE_METADATA_STORE:
+            raise HTTPException(
+                status_code=400,
+                detail="Datasource not initialized. Please interact with the Tableau Extension first."
+            )
+
+        logger.info(f"Chat request from client {client_id}: '{request.message}'")
+        
         agent = setup_agent(fastapi_request)
         messages = {"messages": [("user", request.message)]}
         response_text = ""
-        for chunk in agent.stream(messages, config=config, stream_mode="values"):
-            if 'messages' in chunk and chunk['messages']:
-                latest_message = chunk['messages'][-1]
-                if hasattr(latest_message, 'content'):
-                    response_text = latest_message.content
-        print(f"🤖 Response: {response_text}")
-        return ChatResponse(response=response_text)
-    except Exception as e:
-        print("❌ Error in /chat endpoint:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        
+        for chunk in agent.stream(messages, config=config):
+            # The streaming output format for create_react_agent may vary slightly.
+            # This logic inspects the chunk for agent responses.
+            if "agent" in chunk:
+                agent_step = chunk["agent"]
+                if hasattr(agent_step, 'messages') and agent_step.messages:
+                   response_text = agent_step.messages[-1].content
 
-if __name__ == "__main__":
+        logger.info(f"Final response: {response_text}")
+        return ChatResponse(response=response_text)
+    
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__" and not os.environ.get("VERCEL"):
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
