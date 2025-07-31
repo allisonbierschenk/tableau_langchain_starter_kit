@@ -73,12 +73,11 @@ class MCPClient:
                 timeout=30
             )
             response.raise_for_status()
-            # The response is NDJSON, so we need to parse the first line.
             response_data = json.loads(response.text.strip())
             
             if 'error' in response_data:
                 error_message = response_data['error'].get('message', 'Unknown error')
-                raise RuntimeError(f"MCP server returned an error for method '{method}': {error_message}")
+                raise RuntimeError(f"MCP server error for method '{method}': {error_message}")
                 
             return response_data.get('result', {})
         except requests.exceptions.RequestException as e:
@@ -86,12 +85,20 @@ class MCPClient:
             raise RuntimeError(f"Failed to communicate with MCP server during '{method}' call.") from e
 
     def connect(self):
-        """Establishes the connection and performs the handshake."""
-        logger.info("Connecting to MCP server...")
-        # The SDK likely sends a 'connect' message implicitly. We'll start with listTools as the first real call.
-        # If a true 'connect' method is needed, it would be called here.
-        # For now, initializing the session is our "connect" step.
-        pass
+        """
+        FIXED: Establishes the connection by sending the required handshake message.
+        """
+        logger.info("Connecting to MCP server with handshake...")
+        connect_params = {
+            "name": "langchain-python-client",
+            "version": "0.1.0",
+            "capabilities": {
+                "tools": {}
+            }
+        }
+        # This call officially establishes the session.
+        self._send_request(method="connect", params=connect_params)
+        logger.info("MCP handshake successful.")
 
     def list_tools(self) -> Dict:
         """Fetches the list of available tools from the server."""
