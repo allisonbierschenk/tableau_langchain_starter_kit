@@ -34,15 +34,14 @@ DATASOURCE_METADATA_STORE = {}
 class ChatRequest(BaseModel):
     message: str
 
-# --- Corrected MCP Client ---
 class MCPClient:
     """
-    A client that correctly handles the JSON-RPC over SSE protocol required by the MCP server.
+    A robust client that correctly handles JSON-RPC over a Server-Sent Events (SSE) stream.
+    It tracks request IDs to differentiate between notifications and tool results.
     """
     def __init__(self, server_url: str):
         self._server_url = server_url
         self._session = requests.Session()
-        # The server expects this specific combination of Accept headers
         self._session.headers.update({
             'Content-Type': 'application/json',
             'Accept': 'application/json, text/event-stream',
@@ -50,56 +49,56 @@ class MCPClient:
         })
         logger.info(f"MCP Client initialized for {server_url}")
 
-    def _parse_sse_response(self, response_text: str) -> Dict:
-        """
-        Reliably parses a Server-Sent Events (SSE) response chunk.
-        It looks for the 'data: ' prefix and extracts the JSON payload.
-        """
-        lines = response_text.strip().split('\n')
-        for line in lines:
-            if line.startswith('data:'):
-                data_content = line[5:].strip()
-                try:
-                    return json.loads(data_content)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse SSE data as JSON: {data_content}")
-                    raise ValueError(f"Invalid JSON in SSE data: {e}") from e
-        logger.warning(f"No 'data:' line found in SSE response chunk: {response_text}")
-        # Fallback for non-SSE JSON responses, though unlikely with MCP
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            raise ValueError("Response is not valid SSE or JSON.")
-
     def _send_request(self, method: str, params: Dict = None) -> Dict:
-        """Sends a JSON-RPC request and parses the SSE response."""
-        payload = {"jsonrpc": "2.0", "method": method, "id": str(uuid.uuid4())}
-        if params:
-            payload["params"] = params
-
-        logger.info(f"Sending MCP Request -> Method: {method}, Params: {json.dumps(params, indent=2)}")
+        """
+        Sends a JSON-RPC request, listens to the SSE stream, and waits specifically
+        for the response message that matches the request's ID.
+        """
+        request_id = str(uuid.uuid4())
+        payload = {"jsonrpc": "2.0", "method": method, "id": request_id, "params": params or {}}
+        
+        logger.info(f"Sending MCP Request -> ID: {request_id}, Method: {method}")
 
         try:
             with self._session.post(self._server_url, json=payload, stream=True, timeout=60) as response:
                 response.raise_for_status()
-                # MCP server sends the full response in a single chunk for simple calls
-                full_response_text = response.text
-                logger.info(f"Raw MCP Response <- {full_response_text[:500]}") # Log first 500 chars
                 
-                parsed_data = self._parse_sse_response(full_response_text)
+                # Process the response as a stream of events
+                for line in response.iter_lines():
+                    # SSE messages start with 'data:'
+                    if line.startswith(b'data:'):
+                        data_content = line[5:].strip()
+                        if not data_content:
+                            continue # Skip empty data lines
 
-                if 'error' in parsed_data:
-                    error_info = parsed_data['error']
-                    raise RuntimeError(f"MCP server error (code {error_info.get('code')}): {error_info.get('message')}")
+                        try:
+                            parsed_data = json.loads(data_content)
+                            
+                            # THIS IS THE CRITICAL LOGIC:
+                            # We check if the message's ID matches our request ID.
+                            # This ensures we get the tool result, not just a notification.
+                            if parsed_data.get('id') == request_id:
+                                if 'error' in parsed_data:
+                                    error_info = parsed_data['error']
+                                    raise RuntimeError(f"MCP server error (code {error_info.get('code')}): {error_info.get('message')}")
+                                
+                                logger.info(f"Received result for ID {request_id}")
+                                return parsed_data.get('result', {}) # Return the actual result and stop listening
+                            
+                            # If it's a notification without an ID, we can log it but we don't return it
+                            elif 'method' in parsed_data and parsed_data['method'] == 'notifications/message':
+                                logger.info(f"Ignoring MCP Notification: {parsed_data.get('params', {}).get('message', '')[:100]}...")
 
-                return parsed_data.get('result', {})
+                        except json.JSONDecodeError:
+                            logger.warning(f"Could not decode a line from SSE stream: {data_content}")
+                            continue
+                
+                # If we finish the stream without finding our response, something went wrong.
+                raise RuntimeError(f"Stream ended without a response for request ID {request_id}")
 
         except requests.exceptions.RequestException as e:
             logger.error(f"HTTP request failed for method '{method}': {e}")
             raise RuntimeError(f"Failed to communicate with MCP server: {e}") from e
-        except ValueError as e:
-            logger.error(f"Error parsing response for method '{method}': {e}")
-            raise RuntimeError(f"Could not parse server response: {e}") from e
 
     def connect(self) -> Dict:
         """Establishes the connection with the required handshake."""
@@ -113,12 +112,10 @@ class MCPClient:
 
     def list_tools(self) -> Dict:
         """Fetches the list of available tools."""
-        logger.info("Fetching tools from MCP server...")
         return self._send_request(method="tools/list")
 
     def call_tool(self, tool_name: str, arguments: Dict, context: Dict = None) -> Dict:
         """Calls a specific tool on the server."""
-        logger.info(f"Calling MCP Tool '{tool_name}' with args: {arguments}")
         params = {"name": tool_name, "arguments": arguments}
         if context:
             params["context"] = context
