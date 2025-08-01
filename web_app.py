@@ -288,19 +288,29 @@ def get_tableau_username(client_id):
     # This should be mapped securely in a real app, but env var is fine for this demo
     return os.environ['TABLEAU_USER']
 
+# In web_app.py, replace the entire generate_jwt function with this one.
+
 def generate_jwt(tableau_username):
     client_id = os.environ['TABLEAU_JWT_CLIENT_ID']
     secret_id = os.environ['TABLEAU_JWT_SECRET_ID']
     secret_value = os.environ['TABLEAU_JWT_SECRET']
     now = datetime.datetime.now(datetime.UTC)
+    
+    # THE FIX IS HERE: We are using a broader set of scopes to ensure
+    # compatibility with the Tableau REST API endpoints being called.
     payload = {
         "iss": client_id,
         "sub": tableau_username,
         "aud": "tableau",
         "jti": str(uuid.uuid4()),
         "exp": now + datetime.timedelta(minutes=5),
-        "scp": ["tableau:rest_api:read", "tableau:datasources:query"] # Use modern scopes
+        "scp": [
+            "tableau:rest_api:read", 
+            "tableau:datasources:query", 
+            "tableau:content:read"
+        ]
     }
+    
     headers = {"kid": secret_id, "iss": client_id}
     return jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
 
