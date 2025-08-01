@@ -160,16 +160,32 @@ def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
     if not available_tools_data:
         raise RuntimeError("MCP server returned no available tools.")
 
+    # THIS IS THE FIX: A mapping from JSON schema types to actual Python types.
+    type_mapping = {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+
     langchain_tools = []
     for tool_data in available_tools_data:
         tool_name = tool_data['name']
         
         # Dynamically create the arguments schema for each tool using Pydantic
-        fields = {
-            p_name: (p_details.get('type', 'string'), Field(..., description=p_details.get('description', '')))
-            for p_name, p_details in tool_data.get('inputSchema', {}).get('properties', {}).items()
-        }
-        # Use create_model to build the Pydantic model for the tool's args
+        fields = {}
+        # Iterate through the properties defined in the tool's input schema
+        for p_name, p_details in tool_data.get('inputSchema', {}).get('properties', {}).items():
+            # Get the JSON type (e.g., "string") and find its Python equivalent (e.g., str)
+            json_type = p_details.get('type', 'string')
+            python_type = type_mapping.get(json_type, str)  # Default to str if unknown
+            # Add the field with the correct Python type to our fields dictionary
+            fields[p_name] = (python_type, Field(None, description=p_details.get('description', '')))
+        
+        # Use Pydantic's create_model to build the class for the tool's arguments
+        # If a tool has no arguments, fields will be empty, and it will correctly handle no-input calls.
         args_schema = create_model(f'{tool_name}Args', **fields)
 
         # Create an instance of our robust MCPTool class
@@ -179,7 +195,7 @@ def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
             datasource_luid=datasource_luid,
             name=tool_name,
             description=tool_data['description'],
-            args_schema=args_schema  # Assign the dynamically created schema
+            args_schema=args_schema
         )
         langchain_tools.append(mcp_tool)
 
