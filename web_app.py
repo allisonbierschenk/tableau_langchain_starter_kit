@@ -138,18 +138,26 @@ class MCPTool(BaseTool):
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool."""
-        # The agent passes arguments as keyword arguments, so we use kwargs here.
-        # *args is included to gracefully handle cases where LangChain might pass
-        # extra positional arguments (like None).
         context = {"datasource_luid": self.datasource_luid}
         result = self.client.call_tool(self.tool_name, kwargs, context)
-        return result.get('content', '')
+        content = result.get('content', '')
+
+        # THIS IS A KEY IMPROVEMENT: If the tool is list-datasources,
+        # we simplify the output to just the names, which is easier for the AI to understand.
+        # This helps prevent the agent from getting stuck in a loop.
+        if self.tool_name == 'list-datasources' and isinstance(content, list):
+            try:
+                # Assuming the content is a list of dicts with a 'name' key
+                return [ds.get('name') for ds in content]
+            except Exception:
+                return content # Fallback if structure is unexpected
+        
+        return content
     
-    # THE FIX: The signature is changed from (self, **kwargs) to (self, *args, **kwargs)
-    # to correctly handle how the LangChain agent calls the tool.
+    # THE FIX FOR THE TypeError IS HERE:
+    # The signature is corrected to accept any arguments LangChain might send.
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool asynchronously."""
-        # Pass all arguments to the synchronous run method.
         return self._run(*args, **kwargs)
 
 def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
@@ -227,14 +235,23 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
         
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
         
+        # THIS IS THE NEW, SMARTER PROMPT inspired by your working example.
+        # It gives the agent a clear multi-step plan.
         prompt_template = """
-        Answer the following questions as best you can. You have access to the following tools:
+        You are a helpful Tableau data assistant. You have access to the following tools:
         {tools}
-        
-        Use the following format:
-        
+
+        CRITICAL INSTRUCTIONS:
+        1. When a user asks a question about data (like "total sales"), you MUST follow this sequence:
+        2. FIRST, use the `list-datasources` tool to see what data sources are available.
+        3. SECOND, look at the list of datasources and identify the most relevant one.
+        4. THIRD, use the `list-fields` tool with the `datasourceLuid` of the chosen data source to see its columns.
+        5. FINALLY, use the `query-datasource` tool to get the data needed to answer the user's question.
+        6. Always use the tools to get the data. DO NOT make up answers.
+
+        Use the following format for your thought process:
         Question: the input question you must answer
-        Thought: you should always think about what to do
+        Thought: your reasoning and plan for the next step.
         Action: the action to take, should be one of [{tool_names}]
         Action Input: the input to the action
         Observation: the result of the action
@@ -255,23 +272,14 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
         yield f"event: progress\ndata: {json.dumps({'message': 'Starting AI analysis...'})}\n\n"
         final_response = ""
         
-        # --- THIS IS THE CORRECTED LOGIC ---
         async for chunk in agent_executor.astream_log({"input": message}):
-            # The agent's log stream sends many operations; we only care about the "add" operations for new log entries.
             if chunk.ops and chunk.ops[0]["op"] == "add":
                 log_entry_path = chunk.ops[0]["path"]
-                
-                # We are interested in the log entries that represent the agent's main steps.
                 if log_entry_path.startswith("/logs/") and "streamed_output" not in log_entry_path:
                     log_entry = chunk.ops[0]['value']
-                    
-                    # This is the key fix: We safely check if 'event' and 'data' keys exist before accessing them.
-                    # This prevents the KeyError by ignoring log entries that don't match the expected structure.
                     if isinstance(log_entry, dict) and 'event' in log_entry and 'data' in log_entry:
                         event_type = log_entry['event']
                         event_data = log_entry['data']
-
-                        # Handle the end of the entire chain to get the final answer
                         if event_type == 'on_chain_end' and 'output' in event_data:
                             output = event_data.get('output', {})
                             if isinstance(output, dict) and 'output' in output:
@@ -280,15 +288,12 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
                                 for char in final_answer:
                                     yield f"event: token\ndata: {json.dumps({'token': char})}\n\n"
                                     await asyncio.sleep(0.01)
-                        
-                        # Handle the start of a tool call to show progress
                         elif event_type == 'on_tool_start' and 'tool_input' in event_data:
                             tool_input = event_data.get('tool_input', {})
                             tool_name = tool_input.get('tool_name', 'Unknown Tool')
                             tool_args = tool_input.get('tool_input', {})
                             yield f"event: progress\ndata: {json.dumps({'message': f'Calling tool: {tool_name}({json.dumps(tool_args)})'})}\n\n"
         
-        # Send a final result event for good measure
         yield f"event: result\ndata: {json.dumps({'response': final_response})}\n\n"
 
     except Exception as e:
@@ -298,7 +303,6 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
     finally:
         mcp_client.close()
         yield f"event: done\ndata: {json.dumps({'message': 'Stream complete'})}\n\n"
-
 
 @app.post("/chat")
 async def chat(request: ChatRequest, fastapi_request: Request):
