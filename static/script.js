@@ -1,34 +1,29 @@
-// script.js - REWRITTEN FOR STREAMING
+// script.js - CORRECTED WITH UI AND STREAMING LOGIC
 
 let datasourceReady = false;
 
+// --- Message Display Helper ---
 function addMessage(html, type, messageId = null) {
     const chatBox = document.getElementById('chatBox');
     if (!chatBox) return;
 
     let messageDiv;
     if (messageId && document.getElementById(messageId)) {
-        // Update existing message div
         messageDiv = document.getElementById(messageId);
     } else {
-        // Create new message div
         messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}`;
-        if (messageId) {
-            messageDiv.id = messageId;
-        }
+        if (messageId) messageDiv.id = messageId;
         chatBox.appendChild(messageDiv);
     }
-
-    // Use innerHTML to render bold tags, etc.
-    messageDiv.innerHTML = html.replace(/\n/g, '<br>');
-
-    // Scroll to bottom
+    
+    // Use innerHTML to render HTML tags like <br> and <b>
+    messageDiv.innerHTML = html;
     chatBox.scrollTop = chatBox.scrollHeight;
     return messageDiv;
 }
 
-// --- NEW STREAMING SEND MESSAGE FUNCTION ---
+// --- Streaming Chat Functionality ---
 async function sendMessage() {
     if (!datasourceReady) {
         addMessage("Please wait, the datasource is not ready.", "bot");
@@ -41,13 +36,11 @@ async function sendMessage() {
     addMessage(message, 'user');
     input.value = '';
     
-    // Disable input during response generation
     const sendBtn = document.getElementById('sendBtn');
     input.disabled = true;
     sendBtn.disabled = true;
     sendBtn.textContent = 'Thinking...';
 
-    // Create a placeholder for the bot's response
     const botMessageId = 'bot-response-' + Date.now();
     let botMessageDiv = addMessage('<div class="loading-dots"><span>.</span><span>.</span><span>.</span></div>', 'bot', botMessageId);
     let fullResponse = '';
@@ -85,15 +78,13 @@ async function sendMessage() {
                     const data = JSON.parse(dataMatch[1]);
 
                     if (event === 'progress') {
-                        // Display progress updates in the bot message bubble
                         botMessageDiv.innerHTML = `⏳ ${data.message}`;
                     } else if (event === 'token') {
-                        // Append token to the response
+                        if (fullResponse.length === 0) botMessageDiv.innerHTML = ''; // Clear loading message
                         fullResponse += data.token;
                         botMessageDiv.innerHTML = fullResponse.replace(/\n/g, '<br>');
                     } else if (event === 'result') {
-                        // Final result received, ensure the full response is displayed
-                        addMessage(data.response, 'bot', botMessageId); // Overwrite with final clean response
+                        botMessageDiv.innerHTML = data.response.replace(/\n/g, '<br>');
                     } else if (event === 'error') {
                         throw new Error(`Stream error: ${data.error}`);
                     }
@@ -104,14 +95,12 @@ async function sendMessage() {
         console.error('Error:', error);
         addMessage(`❌ **Error:**<br>${error.message}`, 'bot', botMessageId);
     } finally {
-        // Re-enable input
         input.disabled = false;
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send';
         input.focus();
     }
 }
-
 
 function handleEnter(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -120,7 +109,7 @@ function handleEnter(event) {
     }
 }
 
-// --- Your Existing Tableau Extensions and UI logic (no changes needed here) ---
+// --- Tableau Extensions API: List, display, and send data sources ---
 async function listAndSendDashboardDataSources() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
@@ -172,8 +161,61 @@ async function listAndSendDashboardDataSources() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('sendBtn').addEventListener('click', sendMessage);
-    document.getElementById('messageInput').addEventListener('keypress', handleEnter);
+// --- RESTORED: Extension UI Resize Helpers ---
+function resizeForChatOpen() {
+    if (window.tableau?.extensions?.ui?.setSizeAsync) {
+        tableau.extensions.ui.setSizeAsync({ width: 420, height: 600 });
+    }
+}
+
+function resizeForChatClosed() {
+    if (window.tableau?.extensions?.ui?.setSizeAsync) {
+        tableau.extensions.ui.setSizeAsync({ width: 80, height: 80 });
+    }
+}
+
+// --- RESTORED: Full DOMContentLoaded event listener ---
+document.addEventListener('DOMContentLoaded', async function() {
+    const chatIconBtn = document.getElementById('chatIconBtn');
+    const chatContainer = document.getElementById('chatContainer');
+    const closeChatBtn = document.getElementById('closeChatBtn');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    if (messageInput) messageInput.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+
+    if (messageInput) messageInput.addEventListener('keypress', handleEnter);
+    if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+
+    if (chatIconBtn && chatContainer && closeChatBtn) {
+        try {
+            await tableau.extensions.initializeAsync();
+        } catch (e) {
+            console.warn('Tableau Extensions API not available.');
+        }
+        
+        resizeForChatClosed();
+
+        chatIconBtn.addEventListener('click', function() {
+            chatContainer.classList.remove('chat-container-hidden');
+            chatContainer.classList.add('chat-container-visible');
+            chatIconBtn.style.display = 'none';
+            resizeForChatOpen();
+            setTimeout(() => { if (messageInput) messageInput.focus(); }, 100);
+        });
+
+        closeChatBtn.addEventListener('click', function() {
+            chatContainer.classList.remove('chat-container-visible');
+            chatContainer.classList.add('chat-container-hidden');
+            chatIconBtn.style.display = 'flex';
+            resizeForChatClosed();
+        });
+    }
+
+    if (messageInput && !chatContainer.classList.contains('chat-container-hidden')) {
+        messageInput.focus();
+    }
+
     listAndSendDashboardDataSources();
 });
