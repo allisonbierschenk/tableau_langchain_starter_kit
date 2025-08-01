@@ -555,9 +555,73 @@ def lookup_published_luid_by_name(name: str, tableau_username: str):
         logger.error(f"Datasource lookup failed: {e}")
         raise RuntimeError(f"Failed to lookup datasource '{name}': {e}")
 
+def debug_datasource_publishing_status(tableau_username: str, datasource_name: str):
+    """
+    Debug function to check if a datasource has published fields and why it might not.
+    """
+    try:
+        token, site_id = tableau_signin_with_jwt(tableau_username)
+        domain = os.environ.get('TABLEAU_DOMAIN_FULL')
+        api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
+        
+        # Get datasource details
+        url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
+        headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
+        params = {"filter": f"name:eq:{datasource_name}"}
+        
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        
+        datasources = resp.json().get("datasources", {}).get("datasource", [])
+        if not datasources:
+            logger.error(f"Datasource '{datasource_name}' not found")
+            return
+            
+        ds = datasources[0]
+        ds_id = ds["id"]
+        
+        logger.info(f"Datasource found: {ds}")
+        logger.info(f"Datasource ID: {ds_id}")
+        logger.info(f"Content URL: {ds.get('contentUrl', 'N/A')}")
+        logger.info(f"Project: {ds.get('project', {}).get('name', 'N/A')}")
+        logger.info(f"Owner: {ds.get('owner', {}).get('name', 'N/A')}")
+        
+        # Try to get datasource connections
+        connections_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources/{ds_id}/connections"
+        try:
+            conn_resp = requests.get(connections_url, headers=headers, timeout=30)
+            if conn_resp.status_code == 200:
+                connections = conn_resp.json()
+                logger.info(f"Datasource connections: {connections}")
+            else:
+                logger.warning(f"Could not get connections (status {conn_resp.status_code})")
+        except Exception as e:
+            logger.warning(f"Error getting connections: {e}")
+            
+        # Check if datasource has any workbooks using it
+        workbooks_url = f"{domain}/api/{api_version}/sites/{site_id}/workbooks"
+        try:
+            wb_resp = requests.get(workbooks_url, headers=headers, timeout=30)
+            if wb_resp.status_code == 200:
+                workbooks = wb_resp.json().get("workbooks", {}).get("workbook", [])
+                using_workbooks = [wb for wb in workbooks if any(
+                    conn.get("datasource", {}).get("id") == ds_id 
+                    for conn in wb.get("connections", {}).get("connection", [])
+                )]
+                logger.info(f"Workbooks using this datasource: {len(using_workbooks)}")
+        except Exception as e:
+            logger.warning(f"Error checking workbooks: {e}")
+            
+        return ds_id, ds
+        
+    except Exception as e:
+        logger.error(f"Debug check failed: {e}")
+        raise
+
+# Add this to your datasource initialization
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: Dict[str, Any]):
-    """Enhanced datasource initialization endpoint."""
+    """Enhanced datasource initialization endpoint with debugging."""
     try:
         client_id = request.client.host
         datasources_map = body.get("datasources", {})
@@ -569,6 +633,12 @@ async def receive_datasources(request: Request, body: Dict[str, Any]):
         logger.info(f"Initializing datasource '{first_name}' for client {client_id}")
         
         tableau_username = get_tableau_username(client_id)
+        
+        # Add debugging
+        logger.info("=== DEBUGGING DATASOURCE STATUS ===")
+        debug_datasource_publishing_status(tableau_username, first_name)
+        logger.info("=== END DEBUG ===")
+        
         published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username)
 
         DATASOURCE_METADATA_STORE[client_id] = {
@@ -587,8 +657,6 @@ async def receive_datasources(request: Request, body: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Datasource initialization failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to initialize datasource: {str(e)}")
-
-# --- STATIC FILES AND HEALTH CHECK ---
 
 @app.get("/health")
 async def health_check():
