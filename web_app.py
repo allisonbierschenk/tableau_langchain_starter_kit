@@ -134,28 +134,35 @@ class MCPTool(BaseTool):
     datasource_luid: str
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
-        """Execute the tool."""
+        """Execute the tool and correctly parse the nested MCP response."""
         context = {"datasource_luid": self.datasource_luid}
         result = self.client.call_tool(self.tool_name, kwargs, context)
         content = result.get('content', '')
 
-        # THIS IS A KEY IMPROVEMENT: If the tool is list-datasources,
-        # we simplify the output to just the names, which is easier for the AI to understand.
-        # This helps prevent the agent from getting stuck in a loop.
-        if self.tool_name == 'list-datasources' and isinstance(content, list):
-            try:
-                # Assuming the content is a list of dicts with a 'name' key
-                return [ds.get('name') for ds in content]
-            except Exception:
-                return content # Fallback if structure is unexpected
-        
+        # THIS IS THE FIX: The actual tool result from the MCP server is often
+        # a JSON string nested inside this structure: [{'type': 'text', 'text': '[...]'}]
+        # We must parse this string to get the real data.
+        try:
+            if isinstance(content, list) and len(content) > 0 and 'text' in content[0]:
+                # Parse the JSON string to get the actual list or dictionary
+                actual_output = json.loads(content[0]['text'])
+                
+                # Now, apply the special simplification for list-datasources to the REAL data
+                if self.tool_name == 'list-datasources' and isinstance(actual_output, list):
+                    return [ds.get('name') for ds in actual_output if 'name' in ds]
+                
+                # For all other tools, return the parsed, correct output
+                return actual_output
+        except (json.JSONDecodeError, TypeError, KeyError):
+            # If parsing fails for any reason, return the raw content to avoid crashing
+            return content
+            
         return content
     
-    # THE FIX FOR THE TypeError IS HERE:
-    # The signature is corrected to accept any arguments LangChain might send.
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool asynchronously."""
         return self._run(*args, **kwargs)
+
 
 def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
     """
