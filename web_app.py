@@ -14,6 +14,8 @@ import datetime
 import json
 import asyncio
 from typing import Dict, Any
+from langchain.tools import BaseTool
+
 
 # --- Basic Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -128,14 +130,29 @@ class MCPClient:
         self._session.close()
 
 
-# --- LangChain Setup ---
-# We will set up the agent inside the streaming endpoint for simplicity
-# This requires installing langchain, langchain-openai, langsmith
+class MCPTool(BaseTool):
+    """A custom LangChain tool to interact with the MCP server."""
+    client: MCPClient
+    tool_name: str
+    datasource_luid: str
+
+    def _run(self, **kwargs: Any) -> Any:
+        """Execute the tool."""
+        context = {"datasource_luid": self.datasource_luid}
+        result = self.client.call_tool(self.tool_name, kwargs, context)
+        # Return the raw Python object (list/dict). LangChain handles it better than a JSON string.
+        return result.get('content', '')
+    
+    async def _arun(self, **kwargs: Any) -> Any:
+        """Execute the tool asynchronously."""
+        # For simplicity, we'll just wrap the synchronous call.
+        # In a production app, you might make the MCPClient fully async.
+        return self._run(**kwargs)
 
 def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
-    """Creates LangChain tools from the MCP server's tool list."""
-    from langchain.tools import BaseTool, tool
-
+    """
+    Creates a list of robust MCPTool instances for the LangChain agent.
+    """
     datasource_luid = ds_metadata['luid']
     logger.info(f"Setting up LangChain tools for Datasource LUID: {datasource_luid}")
     
@@ -146,37 +163,28 @@ def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
     langchain_tools = []
     for tool_data in available_tools_data:
         tool_name = tool_data['name']
-        tool_desc = tool_data['description']
         
-        # Dynamically create a function that we can decorate with @tool
-        def create_tool_func(name, desc):
-            def mcp_tool_caller(**kwargs):
-                """Dynamically generated tool function"""
-                try:
-                    context = {"datasource_luid": datasource_luid}
-                    result = client.call_tool(name, kwargs, context)
-                    # Return the content, which is often a JSON string inside a list
-                    content = result.get('content', '')
-                    if isinstance(content, list) and len(content) > 0 and 'text' in content[0]:
-                        return content[0]['text']
-                    return json.dumps(content)
-                except Exception as e:
-                    logger.error(f"Error calling MCP tool '{name}': {e}")
-                    return f"Error: {e}"
-            
-            # Use a more descriptive name for the dynamic function
-            mcp_tool_caller.__name__ = tool_name
-            mcp_tool_caller.__doc__ = tool_desc
-            
-            # Use LangChain's @tool decorator to create the tool
-            return tool(mcp_tool_caller)
+        # Dynamically create the arguments schema for each tool using Pydantic
+        fields = {
+            p_name: (p_details.get('type', 'string'), Field(..., description=p_details.get('description', '')))
+            for p_name, p_details in tool_data.get('inputSchema', {}).get('properties', {}).items()
+        }
+        # Use create_model to build the Pydantic model for the tool's args
+        args_schema = create_model(f'{tool_name}Args', **fields)
 
-        new_tool = create_tool_func(tool_name, tool_desc)
-        langchain_tools.append(new_tool)
+        # Create an instance of our robust MCPTool class
+        mcp_tool = MCPTool(
+            client=client,
+            tool_name=tool_name,
+            datasource_luid=datasource_luid,
+            name=tool_name,
+            description=tool_data['description'],
+            args_schema=args_schema  # Assign the dynamically created schema
+        )
+        langchain_tools.append(mcp_tool)
 
     logger.info(f"Created {len(langchain_tools)} LangChain tools: {[t.name for t in langchain_tools]}")
     return langchain_tools
-
 
 # --- STREAMING CHAT ENDPOINT ---
 async def stream_chat_events(message: str, ds_metadata: Dict):
