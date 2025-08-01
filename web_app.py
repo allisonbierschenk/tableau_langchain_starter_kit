@@ -122,13 +122,28 @@ class MCPTool(BaseTool):
     """A custom LangChain tool to interact with the MCP server."""
     client: MCPClient
     tool_name: str
-    # The static datasource_luid field is no longer needed here.
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
-        """Execute the tool and correctly parse the nested MCP response."""
-        # THE FIX IS HERE: We no longer create or pass a 'context' object.
-        # We pass the kwargs from the agent directly as the tool arguments.
-        result = self.client.call_tool(self.tool_name, kwargs)
+        """
+        Execute the tool, intelligently handling arguments passed
+        positionally (as a raw string) or by keyword (as a dict).
+        """
+        tool_args = kwargs
+        
+        # THIS IS THE CRITICAL FIX:
+        # If kwargs is empty but args is not, it means the AI has passed a raw value
+        # (e.g., just the LUID string) instead of a structured dictionary.
+        if not tool_args and args:
+            # We find the names of the arguments the tool is expecting.
+            arg_schema_fields = list(self.args_schema.model_fields.keys())
+            
+            # If the tool expects only ONE argument, we can safely assume
+            # the first value passed in `args` corresponds to that argument.
+            if len(arg_schema_fields) == 1:
+                tool_args = {arg_schema_fields[0]: args[0]}
+
+        # Now `tool_args` is a correctly structured dictionary that the server expects.
+        result = self.client.call_tool(self.tool_name, tool_args)
         content = result.get('content', '')
         
         try:
