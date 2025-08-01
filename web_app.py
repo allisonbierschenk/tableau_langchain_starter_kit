@@ -45,6 +45,8 @@ class DataSourcesRequest(BaseModel): datasources: dict
 # --- IMPROVED MCP CLIENT
 # Replace the MCPClient class in your web_app.py with this fixed version
 
+# Replace the MCPClient class in your web_app.py with this fixed version
+
 class MCPClient:
     """
     A stateful client that manages a persistent session with the MCP server,
@@ -55,7 +57,7 @@ class MCPClient:
         self._session = requests.Session()
         self._session.headers.update({
             'Content-Type': 'application/json',
-            'Accept': 'text/event-stream',  # This is what the StreamableHTTPServerTransport expects
+            'Accept': 'application/json, text/event-stream',  # Server requires both
             'MCP-Protocol-Version': '0.1.0'
         })
         logger.info(f"MCP Client initialized for {server_url}")
