@@ -617,7 +617,184 @@ def debug_datasource_publishing_status(tableau_username: str, datasource_name: s
     except Exception as e:
         logger.error(f"Debug check failed: {e}")
         raise
+def comprehensive_datasource_debug(tableau_username: str, datasource_id: str = None):
+    """
+    Comprehensive debugging function to understand why datasources have no published fields.
+    """
+    try:
+        token, site_id = tableau_signin_with_jwt(tableau_username)
+        domain = os.environ.get('TABLEAU_DOMAIN_FULL')
+        api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
+        
+        headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
+        
+        print("=" * 60)
+        print("COMPREHENSIVE TABLEAU DATASOURCE DEBUGGING")
+        print("=" * 60)
+        
+        # 1. Test basic site access
+        site_url = f"{domain}/api/{api_version}/sites/{site_id}"
+        site_resp = requests.get(site_url, headers=headers, timeout=30)
+        print(f"Site Access Status: {site_resp.status_code}")
+        if site_resp.status_code == 200:
+            site_info = site_resp.json().get('site', {})
+            print(f"Site Name: {site_info.get('name', 'Unknown')}")
+            print(f"Site Content URL: {site_info.get('contentUrl', 'Unknown')}")
+            print(f"Site State: {site_info.get('state', 'Unknown')}")
+        
+        # 2. Get all datasources with detailed info
+        datasources_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
+        ds_resp = requests.get(datasources_url, headers=headers, timeout=30)
+        
+        if ds_resp.status_code != 200:
+            print(f"ERROR: Could not fetch datasources. Status: {ds_resp.status_code}")
+            print(f"Response: {ds_resp.text}")
+            return
+            
+        datasources_data = ds_resp.json()
+        datasources = datasources_data.get('datasources', {}).get('datasource', [])
+        
+        print(f"\nFound {len(datasources)} datasources")
+        
+        # 3. Examine specific datasource or first few
+        test_datasources = [datasources[0]] if datasource_id is None else [
+            ds for ds in datasources if ds['id'] == datasource_id
+        ]
+        
+        if not test_datasources:
+            print(f"No datasource found with ID: {datasource_id}")
+            return
+            
+        for i, ds in enumerate(test_datasources[:3]):  # Test first 3 or specified one
+            print(f"\n{'='*40}")
+            print(f"DATASOURCE {i+1}: {ds['name']}")
+            print(f"{'='*40}")
+            
+            ds_id = ds['id']
+            print(f"ID: {ds_id}")
+            print(f"Content URL: {ds.get('contentUrl', 'N/A')}")
+            print(f"Created At: {ds.get('createdAt', 'N/A')}")
+            print(f"Updated At: {ds.get('updatedAt', 'N/A')}")
+            print(f"Type: {ds.get('type', 'N/A')}")
+            print(f"Has Extracts: {ds.get('hasExtracts', 'N/A')}")
+            print(f"Use Remote Query Agent: {ds.get('useRemoteQueryAgent', 'N/A')}")
+            
+            # Project info
+            project = ds.get('project', {})
+            print(f"Project: {project.get('name', 'N/A')} (ID: {project.get('id', 'N/A')})")
+            
+            # Owner info
+            owner = ds.get('owner', {})
+            print(f"Owner: {owner.get('name', 'N/A')} (ID: {owner.get('id', 'N/A')})")
+            
+            # 4. Try to get datasource connections
+            connections_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources/{ds_id}/connections"
+            try:
+                conn_resp = requests.get(connections_url, headers=headers, timeout=30)
+                print(f"\nConnections Status: {conn_resp.status_code}")
+                if conn_resp.status_code == 200:
+                    connections_data = conn_resp.json()
+                    connections = connections_data.get('connections', {}).get('connection', [])
+                    print(f"Number of connections: {len(connections)}")
+                    for j, conn in enumerate(connections):
+                        print(f"  Connection {j+1}:")
+                        print(f"    ID: {conn.get('id', 'N/A')}")
+                        print(f"    Type: {conn.get('type', 'N/A')}")
+                        print(f"    Server Address: {conn.get('serverAddress', 'N/A')}")
+                        print(f"    Server Port: {conn.get('serverPort', 'N/A')}")
+                        print(f"    Username: {conn.get('userName', 'N/A')}")
+                else:
+                    print(f"Could not get connections: {conn_resp.text}")
+            except Exception as e:
+                print(f"Error getting connections: {e}")
+            
+            # 5. Try different field listing approaches
+            print(f"\n--- FIELD LISTING ATTEMPTS ---")
+            
+            # Standard fields endpoint
+            fields_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources/{ds_id}"
+            try:
+                fields_resp = requests.get(fields_url, headers=headers, timeout=30)
+                print(f"Datasource Detail Status: {fields_resp.status_code}")
+                if fields_resp.status_code == 200:
+                    detail_data = fields_resp.json()
+                    print(f"Detail Response Keys: {list(detail_data.keys())}")
+                    
+                    # Look for any field-related info
+                    ds_detail = detail_data.get('datasource', {})
+                    print(f"Datasource Detail Keys: {list(ds_detail.keys())}")
+                else:
+                    print(f"Detail response: {fields_resp.text}")
+            except Exception as e:
+                print(f"Error getting datasource details: {e}")
+            
+            # Try metadata endpoint (if available)
+            metadata_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources/{ds_id}/metadata"
+            try:
+                metadata_resp = requests.get(metadata_url, headers=headers, timeout=30)
+                print(f"Metadata Status: {metadata_resp.status_code}")
+                if metadata_resp.status_code == 200:
+                    metadata_data = metadata_resp.json()
+                    print(f"Metadata Keys: {list(metadata_data.keys())}")
+                    print(f"Metadata: {json.dumps(metadata_data, indent=2)[:500]}...")
+                else:
+                    print(f"Metadata not available: {metadata_resp.text[:200]}")
+            except Exception as e:
+                print(f"Error getting metadata: {e}")
+            
+            # 6. Check permissions
+            permissions_url = f"{domain}/api/{api_version}/sites/{site_id}/datasources/{ds_id}/permissions"
+            try:
+                perm_resp = requests.get(permissions_url, headers=headers, timeout=30)
+                print(f"Permissions Status: {perm_resp.status_code}")
+                if perm_resp.status_code == 200:
+                    perm_data = perm_resp.json()
+                    permissions = perm_data.get('permissions', {})
+                    grantee_capabilities = permissions.get('granteeCapabilities', [])
+                    print(f"Number of permission entries: {len(grantee_capabilities)}")
+                    
+                    # Look for current user's permissions
+                    for perm in grantee_capabilities:
+                        grantee = perm.get('user', perm.get('group', {}))
+                        if grantee.get('name') == tableau_username:
+                            capabilities = perm.get('capabilities', {}).get('capability', [])
+                            print(f"Current user capabilities: {[c.get('name') for c in capabilities]}")
+                            break
+                else:
+                    print(f"Could not get permissions: {perm_resp.text[:200]}")
+            except Exception as e:
+                print(f"Error getting permissions: {e}")
+                
+        print(f"\n{'='*60}")
+        print("DEBUGGING COMPLETE")
+        print(f"{'='*60}")
+        
+    except Exception as e:
+        print(f"Debug failed: {e}")
+        import traceback
+        traceback.print_exc()
 
+# Add this to your web app for testing
+@app.post("/debug-datasources")
+async def debug_datasources(request: Request):
+    """Debug endpoint to understand datasource issues."""
+    try:
+        client_id = request.client.host
+        tableau_username = get_tableau_username(client_id)
+        
+        # Get datasource info from store
+        ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
+        datasource_id = ds_metadata.get('luid') if ds_metadata else None
+        
+        print("Starting comprehensive datasource debugging...")
+        comprehensive_datasource_debug(tableau_username, datasource_id)
+        
+        return {"status": "debug_complete", "check_logs": True}
+        
+    except Exception as e:
+        logger.error(f"Debug failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Debug failed: {str(e)}")
+    
 # Add this to your datasource initialization
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: Dict[str, Any]):
