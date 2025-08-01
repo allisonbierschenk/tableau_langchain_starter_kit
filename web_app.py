@@ -55,37 +55,31 @@ class MCPClient:
         for the response message that matches the request's ID.
         """
         request_id = str(uuid.uuid4())
+        # Ensure params is never None, which can cause issues with some servers.
         payload = {"jsonrpc": "2.0", "method": method, "id": request_id, "params": params or {}}
         
-        logger.info(f"Sending MCP Request -> ID: {request_id}, Method: {method}")
+        logger.info(f"Sending MCP Request -> ID: {request_id}, Payload: {json.dumps(payload, indent=2)}")
 
         try:
             with self._session.post(self._server_url, json=payload, stream=True, timeout=60) as response:
                 response.raise_for_status()
                 
-                # Process the response as a stream of events
                 for line in response.iter_lines():
-                    # SSE messages start with 'data:'
                     if line.startswith(b'data:'):
                         data_content = line[5:].strip()
                         if not data_content:
-                            continue # Skip empty data lines
+                            continue
 
                         try:
                             parsed_data = json.loads(data_content)
-                            
-                            # THIS IS THE CRITICAL LOGIC:
-                            # We check if the message's ID matches our request ID.
-                            # This ensures we get the tool result, not just a notification.
                             if parsed_data.get('id') == request_id:
                                 if 'error' in parsed_data:
                                     error_info = parsed_data['error']
                                     raise RuntimeError(f"MCP server error (code {error_info.get('code')}): {error_info.get('message')}")
                                 
                                 logger.info(f"Received result for ID {request_id}")
-                                return parsed_data.get('result', {}) # Return the actual result and stop listening
+                                return parsed_data.get('result', {})
                             
-                            # If it's a notification without an ID, we can log it but we don't return it
                             elif 'method' in parsed_data and parsed_data['method'] == 'notifications/message':
                                 logger.info(f"Ignoring MCP Notification: {parsed_data.get('params', {}).get('message', '')[:100]}...")
 
@@ -93,7 +87,6 @@ class MCPClient:
                             logger.warning(f"Could not decode a line from SSE stream: {data_content}")
                             continue
                 
-                # If we finish the stream without finding our response, something went wrong.
                 raise RuntimeError(f"Stream ended without a response for request ID {request_id}")
 
         except requests.exceptions.RequestException as e:
@@ -114,11 +107,10 @@ class MCPClient:
         """Fetches the list of available tools."""
         return self._send_request(method="tools/list")
 
-    def call_tool(self, tool_name: str, arguments: Dict, context: Dict = None) -> Dict:
-        """Calls a specific tool on the server."""
+    # THE FIX IS HERE: The 'context' parameter has been removed.
+    def call_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        """Calls a specific tool on the server, sending only name and arguments."""
         params = {"name": tool_name, "arguments": arguments}
-        if context:
-            params["context"] = context
         return self._send_request(method="tools/call", params=params)
 
     def close(self):
@@ -126,22 +118,19 @@ class MCPClient:
         logger.info("Closing MCP client session.")
         self._session.close()
 
-
 class MCPTool(BaseTool):
     """A custom LangChain tool to interact with the MCP server."""
     client: MCPClient
     tool_name: str
-    datasource_luid: str
+    # The static datasource_luid field is no longer needed here.
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool and correctly parse the nested MCP response."""
-        context = {"datasource_luid": self.datasource_luid}
-        result = self.client.call_tool(self.tool_name, kwargs, context)
+        # THE FIX IS HERE: We no longer create or pass a 'context' object.
+        # We pass the kwargs from the agent directly as the tool arguments.
+        result = self.client.call_tool(self.tool_name, kwargs)
         content = result.get('content', '')
-
-        # THE FIX: We now correctly parse the nested response and, crucially,
-        # return the FULL, rich data (e.g., [{'name': '...', 'id': '...'}])
-        # to the agent, not just the name. This gives it the LUID it needs.
+        
         try:
             if isinstance(content, list) and len(content) > 0 and 'text' in content[0]:
                 actual_output = json.loads(content[0]['text'])
