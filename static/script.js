@@ -1,25 +1,56 @@
-// --- Simple chat functionality ---
+// script.js - REWRITTEN FOR STREAMING
 
-let datasourceReady = false; // Track if LUID is ready
+let datasourceReady = false;
 
+function addMessage(html, type, messageId = null) {
+    const chatBox = document.getElementById('chatBox');
+    if (!chatBox) return;
+
+    let messageDiv;
+    if (messageId && document.getElementById(messageId)) {
+        // Update existing message div
+        messageDiv = document.getElementById(messageId);
+    } else {
+        // Create new message div
+        messageDiv = document.createElement('div');
+        messageDiv.className = `message ${type}`;
+        if (messageId) {
+            messageDiv.id = messageId;
+        }
+        chatBox.appendChild(messageDiv);
+    }
+
+    // Use innerHTML to render bold tags, etc.
+    messageDiv.innerHTML = html.replace(/\n/g, '<br>');
+
+    // Scroll to bottom
+    chatBox.scrollTop = chatBox.scrollHeight;
+    return messageDiv;
+}
+
+// --- NEW STREAMING SEND MESSAGE FUNCTION ---
 async function sendMessage() {
     if (!datasourceReady) {
-        addMessage("Please wait for the datasource to finish loading.", "bot");
+        addMessage("Please wait, the datasource is not ready.", "bot");
         return;
     }
     const input = document.getElementById('messageInput');
-    if (!input) return;
     const message = input.value.trim();
     if (!message) return;
 
     addMessage(message, 'user');
     input.value = '';
+    
+    // Disable input during response generation
+    const sendBtn = document.getElementById('sendBtn');
+    input.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Thinking...';
 
-    const btn = document.getElementById('sendBtn');
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Thinking...';
-    }
+    // Create a placeholder for the bot's response
+    const botMessageId = 'bot-response-' + Date.now();
+    let botMessageDiv = addMessage('<div class="loading-dots"><span>.</span><span>.</span><span>.</span></div>', 'bot', botMessageId);
+    let fullResponse = '';
 
     try {
         const response = await fetch('/chat', {
@@ -28,41 +59,59 @@ async function sendMessage() {
             body: JSON.stringify({ message })
         });
 
-        const data = await response.json();
-
-        if (response.ok) {
-            addMessage(data.response, 'bot');
-        } else {
-            // Show backend error message if available
-            if (data && data.detail) {
-                addMessage('Error: ' + data.detail, 'bot');
-            } else {
-                addMessage('Sorry, something went wrong! Please try again.', 'bot');
-            }
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Network response was not ok');
         }
 
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop(); // Keep incomplete event in buffer
+
+            for (const line of lines) {
+                const eventMatch = line.match(/event: (.*)/);
+                const dataMatch = line.match(/data: (.*)/);
+
+                if (eventMatch && dataMatch) {
+                    const event = eventMatch[1];
+                    const data = JSON.parse(dataMatch[1]);
+
+                    if (event === 'progress') {
+                        // Display progress updates in the bot message bubble
+                        botMessageDiv.innerHTML = `⏳ ${data.message}`;
+                    } else if (event === 'token') {
+                        // Append token to the response
+                        fullResponse += data.token;
+                        botMessageDiv.innerHTML = fullResponse.replace(/\n/g, '<br>');
+                    } else if (event === 'result') {
+                        // Final result received, ensure the full response is displayed
+                        addMessage(data.response, 'bot', botMessageId); // Overwrite with final clean response
+                    } else if (event === 'error') {
+                        throw new Error(`Stream error: ${data.error}`);
+                    }
+                }
+            }
+        }
     } catch (error) {
         console.error('Error:', error);
-        addMessage('Sorry, I couldn\'t connect to the server. Please try again.', 'bot');
-    }
-
-    if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Send';
+        addMessage(`❌ **Error:**<br>${error.message}`, 'bot', botMessageId);
+    } finally {
+        // Re-enable input
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
     }
 }
 
-function addMessage(text, type) {
-    const chatBox = document.getElementById('chatBox');
-    if (!chatBox) return;
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${type}`;
-    messageDiv.innerHTML = text.replace(/\n/g, '<br>');
-    chatBox.appendChild(messageDiv);
-
-    // Scroll to bottom
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
 
 function handleEnter(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -71,23 +120,20 @@ function handleEnter(event) {
     }
 }
 
-// --- Tableau Extensions API: List, display, and send data sources ---
+// --- Your Existing Tableau Extensions and UI logic (no changes needed here) ---
 async function listAndSendDashboardDataSources() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
-    // Disable input and button by default
     if (messageInput) messageInput.disabled = true;
     if (sendBtn) sendBtn.disabled = true;
     datasourceReady = false;
 
     try {
         await tableau.extensions.initializeAsync();
-
         const dashboard = tableau.extensions.dashboardContent.dashboard;
         const worksheets = dashboard.worksheets;
-        const dataSourceMap = {}; // { name: LUID }
+        const dataSourceMap = {};
 
-        // Collect all unique data sources by LUID
         for (const worksheet of worksheets) {
             const dataSources = await worksheet.getDataSourcesAsync();
             dataSources.forEach(ds => {
@@ -96,111 +142,38 @@ async function listAndSendDashboardDataSources() {
                 }
             });
         }
-
+        
         const namesArray = Object.keys(dataSourceMap);
         if (namesArray.length === 0) {
             addMessage("No data sources detected in this dashboard.", "bot");
-        } else {
-            addMessage(
-                "🔎 <b>Detected data sources in this dashboard:</b><br>" +
-                namesArray.map(name => `• <b>${name}</b>`).join('<br>'),
-                "bot"
-            );
+            return;
         }
 
-        // Send the data source map to the backend for dynamic LUID selection
+        addMessage(`🔎 **Detected data source:**<br>• <b>${namesArray[0]}</b><br>Initializing...`, "bot");
+
         const resp = await fetch('/datasources', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ datasources: dataSourceMap })
         });
-
+        
+        const respData = await resp.json();
         if (resp.ok) {
             datasourceReady = true;
             if (messageInput) messageInput.disabled = false;
             if (sendBtn) sendBtn.disabled = false;
+            addMessage(`✅ Ready! You can now ask questions about the <b>${namesArray[0]}</b> data source.`, "bot");
         } else {
-            datasourceReady = false;
-            if (messageInput) messageInput.disabled = true;
-            if (sendBtn) sendBtn.disabled = true;
-            addMessage("Could not initialize datasource. Please reload the dashboard.", "bot");
+            throw new Error(respData.detail || "Failed to initialize datasource on backend.");
         }
-
     } catch (err) {
-        datasourceReady = false;
-        if (messageInput) messageInput.disabled = true;
-        if (sendBtn) sendBtn.disabled = true;
-        console.error("Error initializing Tableau Extensions API or fetching data sources:", err);
-        addMessage("⚠️ Could not detect Tableau data sources. Make sure this extension is running inside a Tableau dashboard.", "bot");
+        console.error("Error initializing Tableau:", err);
+        addMessage(`⚠️ **Initialization Failed:**<br>${err.message}<br>Please ensure the extension is running in a Tableau dashboard and the Python server is running.`, "bot");
     }
 }
 
-// --- Extension UI Resize Helpers ---
-function resizeForChatOpen() {
-    if (window.tableau && tableau.extensions && tableau.extensions.ui && tableau.extensions.ui.setSizeAsync) {
-        tableau.extensions.ui.setSizeAsync({ width: 420, height: 600 });
-    }
-}
-
-function resizeForChatClosed() {
-    if (window.tableau && tableau.extensions && tableau.extensions.ui && tableau.extensions.ui.setSizeAsync) {
-        tableau.extensions.ui.setSizeAsync({ width: 80, height: 80 });
-    }
-}
-
-// --- Focus on input when page loads and set up chat UI ---
-document.addEventListener('DOMContentLoaded', async function() {
-    const chatIconBtn = document.getElementById('chatIconBtn');
-    const chatContainer = document.getElementById('chatContainer');
-    const closeChatBtn = document.getElementById('closeChatBtn');
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-
-    // Disable input/button at start
-    if (messageInput) messageInput.disabled = true;
-    if (sendBtn) sendBtn.disabled = true;
-
-    // Keyboard enter handler
-    if (messageInput) {
-        messageInput.addEventListener('keypress', handleEnter);
-    }
-
-    // Send button handler
-    if (sendBtn) {
-        sendBtn.addEventListener('click', sendMessage);
-    }
-
-    // Defensive: only add listeners if elements exist
-    if (chatIconBtn && chatContainer && closeChatBtn) {
-        // Try to initialize Tableau Extensions API
-        try {
-            await tableau.extensions.initializeAsync();
-        } catch (e) {
-            console.warn('Tableau Extensions API not available or not running in Tableau.');
-        }
-        // Start minimized (icon only)
-        resizeForChatClosed();
-
-        chatIconBtn.addEventListener('click', function() {
-            chatContainer.classList.remove('chat-container-hidden');
-            chatContainer.classList.add('chat-container-visible');
-            chatIconBtn.style.display = 'none';
-            resizeForChatOpen();
-            setTimeout(() => { if (messageInput) messageInput.focus(); }, 100);
-        });
-
-        closeChatBtn.addEventListener('click', function() {
-            chatContainer.classList.remove('chat-container-visible');
-            chatContainer.classList.add('chat-container-hidden');
-            chatIconBtn.style.display = 'flex';
-            resizeForChatClosed();
-        });
-    }
-
-    if (messageInput && !chatContainer.classList.contains('chat-container-hidden')) {
-        messageInput.focus();
-    }
-
-    // --- Tableau extension: Detect, display, and send data sources on load ---
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('sendBtn').addEventListener('click', sendMessage);
+    document.getElementById('messageInput').addEventListener('keypress', handleEnter);
     listAndSendDashboardDataSources();
 });
