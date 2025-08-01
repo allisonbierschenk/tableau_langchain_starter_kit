@@ -136,18 +136,21 @@ class MCPTool(BaseTool):
     tool_name: str
     datasource_luid: str
 
-    def _run(self, **kwargs: Any) -> Any:
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool."""
+        # The agent passes arguments as keyword arguments, so we use kwargs here.
+        # *args is included to gracefully handle cases where LangChain might pass
+        # extra positional arguments (like None).
         context = {"datasource_luid": self.datasource_luid}
         result = self.client.call_tool(self.tool_name, kwargs, context)
-        # Return the raw Python object (list/dict). LangChain handles it better than a JSON string.
         return result.get('content', '')
     
-    async def _arun(self, **kwargs: Any) -> Any:
+    # THE FIX: The signature is changed from (self, **kwargs) to (self, *args, **kwargs)
+    # to correctly handle how the LangChain agent calls the tool.
+    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool asynchronously."""
-        # For simplicity, we'll just wrap the synchronous call.
-        # In a production app, you might make the MCPClient fully async.
-        return self._run(**kwargs)
+        # Pass all arguments to the synchronous run method.
+        return self._run(*args, **kwargs)
 
 def setup_langchain_tools(client: MCPClient, ds_metadata: Dict) -> list:
     """
