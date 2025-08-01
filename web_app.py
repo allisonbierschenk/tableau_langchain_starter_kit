@@ -139,22 +139,14 @@ class MCPTool(BaseTool):
         result = self.client.call_tool(self.tool_name, kwargs, context)
         content = result.get('content', '')
 
-        # THIS IS THE FIX: The actual tool result from the MCP server is often
-        # a JSON string nested inside this structure: [{'type': 'text', 'text': '[...]'}]
-        # We must parse this string to get the real data.
+        # THE FIX: We now correctly parse the nested response and, crucially,
+        # return the FULL, rich data (e.g., [{'name': '...', 'id': '...'}])
+        # to the agent, not just the name. This gives it the LUID it needs.
         try:
             if isinstance(content, list) and len(content) > 0 and 'text' in content[0]:
-                # Parse the JSON string to get the actual list or dictionary
                 actual_output = json.loads(content[0]['text'])
-                
-                # Now, apply the special simplification for list-datasources to the REAL data
-                if self.tool_name == 'list-datasources' and isinstance(actual_output, list):
-                    return [ds.get('name') for ds in actual_output if 'name' in ds]
-                
-                # For all other tools, return the parsed, correct output
                 return actual_output
         except (json.JSONDecodeError, TypeError, KeyError):
-            # If parsing fails for any reason, return the raw content to avoid crashing
             return content
             
         return content
@@ -237,31 +229,31 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
         yield f"event: progress\ndata: {json.dumps({'message': 'Fetching available tools...'})}\n\n"
         tools = setup_langchain_tools(mcp_client, ds_metadata)
         
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
+        llm = ChatOpenAI(model="gpt-4o", temperature=0, streaming=True) # Using gpt-4o for better instruction following
         
-        # THIS IS THE NEW, SMARTER PROMPT inspired by your working example.
-        # It gives the agent a clear multi-step plan.
+        # THE FIX: A much more detailed prompt that explains the workflow,
+        # including how to extract the 'id' (LUID) from the tool's output.
         prompt_template = """
         You are a helpful Tableau data assistant. You have access to the following tools:
         {tools}
 
-        CRITICAL INSTRUCTIONS:
-        1. When a user asks a question about data (like "total sales"), you MUST follow this sequence:
-        2. FIRST, use the `list-datasources` tool to see what data sources are available.
-        3. SECOND, look at the list of datasources and identify the most relevant one.
-        4. THIRD, use the `list-fields` tool with the `datasourceLuid` of the chosen data source to see its columns.
-        5. FINALLY, use the `query-datasource` tool to get the data needed to answer the user's question.
-        6. Always use the tools to get the data. DO NOT make up answers.
+        **CRITICAL WORKFLOW:**
+        1.  When asked a question about data, you **MUST** first use the `list-datasources` tool to see what data is available.
+        2.  The `list-datasources` tool will return a list of datasource objects, like `[{{'name': 'Superstore', 'id': '5f2b4ace...'}}]`.
+        3.  From this list, identify the most relevant datasource and **extract its 'id'**. This ID is the `datasourceLuid`.
+        4.  You **MUST** then use the `list-fields` tool, providing the `datasourceLuid` you just extracted, to see the columns in that datasource.
+        5.  Once you have the field names, use the `query-datasource` tool with the correct `datasourceLuid` and `fields` to answer the user's question.
+        6.  Do not make up field names or LUIDs. You must discover them with the tools.
 
         Use the following format for your thought process:
         Question: the input question you must answer
-        Thought: your reasoning and plan for the next step.
+        Thought: your reasoning and plan for the next step based on the workflow above.
         Action: the action to take, should be one of [{tool_names}]
         Action Input: the input to the action
         Observation: the result of the action
-        ... (this Thought/Action/Action Input/Observation can repeat N times)
-        Thought: I now know the final answer
-        Final Answer: the final answer to the original input question
+        ... (this Thought/Action/Action Input/Observation can repeat)
+        Thought: I now have enough information to provide the final answer.
+        Final Answer: the final answer to the original input question.
 
         Begin!
 
