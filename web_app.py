@@ -188,22 +188,18 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
     from langchain.agents import AgentExecutor, create_react_agent
     from langchain_core.prompts import ChatPromptTemplate
 
-    # The MCP endpoint from your Heroku logs
     mcp_server_url = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
     mcp_client = MCPClient(server_url=mcp_server_url)
 
     try:
-        # 1. Send progress update: Initializing
         yield f"event: progress\ndata: {json.dumps({'message': 'Initializing MCP connection...'})}\n\n"
         mcp_client.connect()
 
-        # 2. Setup LangChain Agent
         yield f"event: progress\ndata: {json.dumps({'message': 'Fetching available tools...'})}\n\n"
         tools = setup_langchain_tools(mcp_client, ds_metadata)
         
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
         
-        # Use a template compatible with create_react_agent
         prompt_template = """
         Answer the following questions as best you can. You have access to the following tools:
         {tools}
@@ -229,34 +225,43 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
         agent = create_react_agent(llm, tools, prompt)
         agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
 
-        # 3. Stream agent execution
         yield f"event: progress\ndata: {json.dumps({'message': 'Starting AI analysis...'})}\n\n"
         final_response = ""
-        # Use astream_log for detailed step-by-step streaming
-        async for chunk in agent_executor.astream_log({"input": message}):
-            # Each 'chunk' is a log of an agent step
-            if chunk.ops:
-                op = chunk.ops[0]
-                if op["op"] == "add" and "/logs/" in op["path"]:
-                    log_entry = op['value']
-                    if log_entry['event'] == 'on_chain_end' and 'output' in log_entry['data']:
-                        # Final answer chunk
-                        output = log_entry['data']['output']
-                        if isinstance(output, dict) and 'output' in output:
-                           final_answer = output['output']
-                           final_response = final_answer # Capture final answer
-                           # Stream the final answer chunk by chunk for a typing effect
-                           for char in final_answer:
-                               yield f"event: token\ndata: {json.dumps({'token': char})}\n\n"
-                               await asyncio.sleep(0.01) # small delay
-                    
-                    elif log_entry['event'] == 'on_tool_start':
-                        # Tool call started
-                        tool_name = log_entry['data']['tool_input']['tool_name']
-                        tool_args = log_entry['data']['tool_input']['tool_input']
-                        yield f"event: progress\ndata: {json.dumps({'message': f'Calling tool: {tool_name}({json.dumps(tool_args)})'})}\n\n"
         
-        # 4. Send final result object
+        # --- THIS IS THE CORRECTED LOGIC ---
+        async for chunk in agent_executor.astream_log({"input": message}):
+            # The agent's log stream sends many operations; we only care about the "add" operations for new log entries.
+            if chunk.ops and chunk.ops[0]["op"] == "add":
+                log_entry_path = chunk.ops[0]["path"]
+                
+                # We are interested in the log entries that represent the agent's main steps.
+                if log_entry_path.startswith("/logs/") and "streamed_output" not in log_entry_path:
+                    log_entry = chunk.ops[0]['value']
+                    
+                    # This is the key fix: We safely check if 'event' and 'data' keys exist before accessing them.
+                    # This prevents the KeyError by ignoring log entries that don't match the expected structure.
+                    if isinstance(log_entry, dict) and 'event' in log_entry and 'data' in log_entry:
+                        event_type = log_entry['event']
+                        event_data = log_entry['data']
+
+                        # Handle the end of the entire chain to get the final answer
+                        if event_type == 'on_chain_end' and 'output' in event_data:
+                            output = event_data.get('output', {})
+                            if isinstance(output, dict) and 'output' in output:
+                                final_answer = output['output']
+                                final_response = final_answer
+                                for char in final_answer:
+                                    yield f"event: token\ndata: {json.dumps({'token': char})}\n\n"
+                                    await asyncio.sleep(0.01)
+                        
+                        # Handle the start of a tool call to show progress
+                        elif event_type == 'on_tool_start' and 'tool_input' in event_data:
+                            tool_input = event_data.get('tool_input', {})
+                            tool_name = tool_input.get('tool_name', 'Unknown Tool')
+                            tool_args = tool_input.get('tool_input', {})
+                            yield f"event: progress\ndata: {json.dumps({'message': f'Calling tool: {tool_name}({json.dumps(tool_args)})'})}\n\n"
+        
+        # Send a final result event for good measure
         yield f"event: result\ndata: {json.dumps({'response': final_response})}\n\n"
 
     except Exception as e:
@@ -265,7 +270,6 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
         yield f"event: error\ndata: {json.dumps({'error': str(e), 'details': error_details})}\n\n"
     finally:
         mcp_client.close()
-        # 5. Signal that the stream is done
         yield f"event: done\ndata: {json.dumps({'message': 'Stream complete'})}\n\n"
 
 
