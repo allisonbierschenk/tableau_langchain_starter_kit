@@ -42,7 +42,9 @@ class ChatRequest(BaseModel): message: str
 class ChatResponse(BaseModel): response: str
 class DataSourcesRequest(BaseModel): datasources: dict
 
-# --- IMPROVED MCP CLIENT (keeping your working approach) ---
+# --- IMPROVED MCP CLIENT
+# Replace the MCPClient class in your web_app.py with this fixed version
+
 class MCPClient:
     """
     A stateful client that manages a persistent session with the MCP server,
@@ -52,11 +54,86 @@ class MCPClient:
         self._server_url = server_url
         self._session = requests.Session()
         self._session.headers.update({
-            'Content-Type': 'application/json',  # Changed from x-ndjson
-            'Accept': 'application/json, text/event-stream',  # Server requires both
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',  # This is what the StreamableHTTPServerTransport expects
             'MCP-Protocol-Version': '0.1.0'
         })
         logger.info(f"MCP Client initialized for {server_url}")
+
+    def _parse_sse_response(self, response_text: str) -> Dict:
+        """
+        Parse Server-Sent Events response format properly.
+        Based on the working TypeScript implementation pattern.
+        """
+        try:
+            response_text = response_text.strip()
+            logger.info(f"Parsing SSE response: {response_text}")
+            
+            # Handle Server-Sent Events format
+            lines = response_text.split('\n')
+            current_event = ''
+            data_content = None
+            
+            for line in lines:
+                line = line.strip()
+                
+                if line.startswith('event: '):
+                    current_event = line[7:].strip()  # Remove 'event: ' prefix
+                    continue
+                    
+                if line.startswith('data: '):
+                    data_content = line[6:].strip()  # Remove 'data: ' prefix
+                    break
+                    
+                # Handle case where there's no explicit 'data: ' prefix
+                # but the line contains JSON (fallback)
+                if line and not line.startswith('event:') and not line.startswith('id:') and not line.startswith('retry:'):
+                    # Try to parse as JSON directly
+                    try:
+                        json.loads(line)
+                        data_content = line
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            
+            # If we found data content, parse it as JSON
+            if data_content:
+                try:
+                    parsed_data = json.loads(data_content)
+                    logger.info(f"Successfully parsed JSON data: {json.dumps(parsed_data, indent=2)}")
+                    return parsed_data
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse data content as JSON: {e}")
+                    logger.error(f"Data content was: {data_content}")
+                    return {
+                        "error": {
+                            "code": -32700,
+                            "message": f"Parse error: Invalid JSON in data field: {str(e)}"
+                        }
+                    }
+            
+            # If no data content found, try parsing the entire response as JSON (fallback)
+            try:
+                parsed_response = json.loads(response_text)
+                logger.info(f"Parsed entire response as JSON: {json.dumps(parsed_response, indent=2)}")
+                return parsed_response
+            except json.JSONDecodeError:
+                logger.error(f"Could not parse SSE response. Full response: {response_text}")
+                return {
+                    "error": {
+                        "code": -32700,
+                        "message": f"Parse error: Could not extract valid JSON from SSE response"
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Unexpected error parsing SSE response: {e}")
+            return {
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error parsing response: {str(e)}"
+                }
+            }
 
     def _send_request(self, method: str, params: Dict = None):
         """Helper to send a JSON-RPC request over the persistent session."""
@@ -64,41 +141,43 @@ class MCPClient:
         if params:
             payload["params"] = params
         
-        ndjson_payload = json.dumps(payload) + '\n'
-        
         logger.info(f"Sending MCP request to URL: {self._server_url}")
         logger.info(f"Request payload: {json.dumps(payload, indent=2)}")
         
         try:
             response = self._session.post(
                 self._server_url,
-                json=payload,  # Use json instead of raw data
+                json=payload,
                 timeout=30
             )
             response.raise_for_status()
             
-            # Handle Server-Sent Events format
+            # Debug logging
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            
+            # Get the raw response text
             response_text = response.text.strip()
-            logger.info(f"Raw response: {response_text}")
+            logger.info(f"Raw response (first 500 chars): {response_text[:500]}")
             
-            # Parse SSE format: "event: message\ndata: {...}"
-            if response_text.startswith('event: message\ndata: '):
-                json_part = response_text.split('data: ', 1)[1]
-                response_data = json.loads(json_part)
-            else:
-                # Fallback to regular JSON parsing
-                response_data = response.json()
+            # Parse the SSE response
+            response_data = self._parse_sse_response(response_text)
             
-            logger.info(f"Parsed response: {json.dumps(response_data, indent=2)}")
-            
+            # Check for errors in the parsed response
             if 'error' in response_data:
-                error_message = response_data['error'].get('message', 'Unknown error')
-                raise RuntimeError(f"MCP server error for method '{method}': {error_message}")
+                error_info = response_data['error']
+                error_message = error_info.get('message', 'Unknown error')
+                error_code = error_info.get('code', -32603)
+                raise RuntimeError(f"MCP server error for method '{method}' (code {error_code}): {error_message}")
                 
             return response_data.get('result', {})
+            
         except requests.exceptions.RequestException as e:
-            logger.error(f"MCP request failed for method '{method}': {e}")
-            raise RuntimeError(f"Failed to communicate with MCP server during '{method}' call.") from e
+            logger.error(f"HTTP request failed for method '{method}': {e}")
+            raise RuntimeError(f"Failed to communicate with MCP server during '{method}' call: {str(e)}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error in _send_request for method '{method}': {e}")
+            raise RuntimeError(f"Unexpected error during MCP '{method}' call: {str(e)}") from e
 
     def connect(self):
         """
@@ -115,7 +194,6 @@ class MCPClient:
                 "version": "0.1.0"
             }
         }
-        # Use the correct MCP method name
         result = self._send_request(method="initialize", params=connect_params)
         logger.info("MCP handshake successful.")
         return result
@@ -125,7 +203,7 @@ class MCPClient:
         logger.info("Fetching tools from MCP server...")
         return self._send_request(method="tools/list")
 
-    def call_tool(self, tool_name: str, arguments: Dict, context: Dict) -> Dict:
+    def call_tool(self, tool_name: str, arguments: Dict, context: Dict = None) -> Dict:
         """Calls a specific tool on the server."""
         logger.info(f"Calling MCP Tool '{tool_name}' with args: {arguments}")
         params = {
@@ -141,7 +219,7 @@ class MCPClient:
         """Closes the session."""
         logger.info("Closing MCP client session.")
         self._session.close()
-
+        
 # --- LANGCHAIN TOOL (unchanged from your working version) ---
 class MCPTool(BaseTool):
     """
