@@ -21,7 +21,7 @@ from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import ChatPromptTemplate
 
 # Import the prompt building functions from your file
-from prompt import build_agent_identity, build_agent_system_prompt
+from utilities.prompt import build_agent_identity, build_agent_system_prompt
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
