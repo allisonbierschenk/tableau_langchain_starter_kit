@@ -1,5 +1,5 @@
 # web_app.py - FINAL CORRECTED VERSION
-# This version fixes the /chat endpoint to stream correctly to your script.js
+# This version fixes the streaming format mismatch.
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -12,13 +12,18 @@ import traceback
 import jwt
 import datetime
 import uuid
-import json  # Added for SSE formatting
+import json
+import logging
 
 from langsmith import Client
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
 from utilities.prompt import build_agent_identity, build_agent_system_prompt
+
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -32,18 +37,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ChatRequest(BaseModel):
     message: str
 
-# This Pydantic model is not used for streaming, but good practice to keep
 class ChatResponse(BaseModel):
     response: str
 
 class DataSourcesRequest(BaseModel):
-    datasources: dict  # { "name": "luid" }
+    datasources: dict
 
-# In-memory stores for session data
 DATASOURCE_LUID_STORE = {}
 DATASOURCE_METADATA_STORE = {}
 
-# --- All your authentication and datasource lookup functions remain UNCHANGED ---
 def get_user_regions(client_id):
     return ['West', 'South']
 
@@ -91,7 +93,6 @@ def lookup_published_luid_by_name(name, tableau_username, user_regions):
     ds = datasources[0]
     return ds["id"], ds
 
-# --- Endpoints ---
 @app.get("/")
 def home():
     return FileResponse('static/index.html')
@@ -124,35 +125,24 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==============================================================================
-# === THE ONLY SECTION THAT HAS BEEN CHANGED IS THE /chat ENDPOINT BELOW ===
-# ==============================================================================
-
 @app.post("/chat")
 async def chat(request: ChatRequest, fastapi_request: Request):
-    """
-    This is the corrected, streaming chat endpoint.
-    """
     client_id = fastapi_request.client.host
     if client_id not in DATASOURCE_LUID_STORE:
         raise HTTPException(status_code=400, detail="Datasource not initialized.")
     
-    # Define a helper function to format Server-Sent Events (SSE)
     def sse_format(event_name: str, data: dict) -> str:
         return f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
 
     async def event_stream():
         try:
-            # 1. SETUP THE AGENT (using your existing logic)
             ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
             datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
             tableau_username = get_tableau_username(client_id)
             
-            # Use your prompt.py functions to build the prompts
             agent_identity = build_agent_identity(ds_metadata)
             system_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name"))
             
-            # The tool for querying the datasource
             analyze_datasource = initialize_simple_datasource_qa(
                 domain=os.environ['TABLEAU_DOMAIN_FULL'],
                 site=os.environ['TABLEAU_SITE'],
@@ -168,39 +158,37 @@ async def chat(request: ChatRequest, fastapi_request: Request):
             tools = [analyze_datasource]
             agent = create_react_agent(model=llm, tools=tools)
 
-            # 2. PREPARE THE INPUT FOR THE AGENT
-            # The system prompt must be the first message in the conversation
             messages = [
                 ("system", system_prompt),
                 ("user", request.message)
             ]
 
-            # 3. STREAM THE RESPONSE
-            final_answer = ""
-            async for chunk in agent.astream({"messages": messages}, config=config):
-                # LangGraph streams dictionary chunks. We look for new message content.
-                if "messages" in chunk:
-                    # Get the most recent message from the list
-                    latest_message = chunk["messages"][-1]
-                    if latest_message.content:
-                        # Stream each piece of new content as a 'token' event
-                        yield sse_format("token", {"token": latest_message.content})
-                        final_answer = latest_message.content
+            full_content = ""
+            yield sse_format("progress", {"message": "AI is thinking..."})
 
-            # Send a final result event (optional, but good practice)
-            yield sse_format("result", {"response": final_answer})
+            # THE CRITICAL FIX IS HERE: `stream_mode="values"`
+            async for chunk in agent.astream({"messages": messages}, config=config, stream_mode="values"):
+                # The 'values' mode gives us chunks like {'agent': {'messages': [...]}}
+                if "agent" in chunk and "messages" in chunk["agent"]:
+                    latest_message = chunk["agent"]["messages"][-1]
+                    new_content = latest_message.content
+                    
+                    # LangGraph streams the full content at each step, so we find what's new
+                    if len(new_content) > len(full_content):
+                        token = new_content[len(full_content):]
+                        full_content = new_content
+                        yield sse_format("token", {"token": token})
+
+            yield sse_format("result", {"response": full_content})
 
         except Exception as e:
             logger.error(f"Error during chat stream: {e}", exc_info=True)
             yield sse_format("error", {"error": str(e)})
         finally:
-            # Signal the end of the stream
             yield sse_format("done", {"message": "Stream complete"})
 
-    # Return the generator function as a streaming response
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-# ... (main execution block, unchanged)
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
