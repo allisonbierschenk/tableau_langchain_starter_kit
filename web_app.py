@@ -151,6 +151,7 @@ async def chat(request: ChatRequest, fastapi_request: Request):
                 jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
                 tableau_user=tableau_username,
                 datasource_luid=datasource_luid,
+                tooling_llm_model="gpt-4o-mini",
                 model_provider="openai"
             )
             
