@@ -1,7 +1,8 @@
-// script.js - ENHANCED VERSION WITH BETTER ERROR HANDLING AND UX
+// script.js - ENHANCED VERSION WITH MCP STREAMING SUPPORT
 
 let datasourceReady = false;
 let currentStream = null;
+let conversationHistory = []; // Track conversation for MCP context
 
 // --- Enhanced Message Display Helper ---
 function addMessage(html, type, messageId = null) {
@@ -42,7 +43,19 @@ function showTypingIndicator(show = true) {
     }
 }
 
-// --- Enhanced Streaming Chat Functionality ---
+// --- Detect if query should use MCP for advanced analytics ---
+function shouldUseMCP(message) {
+    const mcpKeywords = [
+        'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
+        'analytics', 'performance', 'trend', 'trends', 'analysis', 'visualiz',
+        'chart', 'graph', 'plot', 'business intelligence', 'bi'
+    ];
+    
+    const lowerMessage = message.toLowerCase();
+    return mcpKeywords.some(keyword => lowerMessage.includes(keyword));
+}
+
+// --- Enhanced Streaming Chat with MCP Support ---
 async function sendMessage() {
     // Validation checks
     if (!datasourceReady) {
@@ -63,6 +76,9 @@ async function sendMessage() {
         return;
     }
 
+    // Add user message to conversation history
+    conversationHistory.push({ role: 'user', content: message });
+
     // Display user message
     addMessage(escapeHtml(message), 'user');
     input.value = '';
@@ -82,15 +98,38 @@ async function sendMessage() {
         const controller = new AbortController();
         currentStream = controller;
 
-        const response = await fetch('/chat', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'text/event-stream'
-            },
-            body: JSON.stringify({ message }),
-            signal: controller.signal
-        });
+        // Determine which endpoint to use
+        const useMCP = shouldUseMCP(message);
+        const endpoint = useMCP ? '/mcp-chat-stream' : '/chat';
+        
+        console.log(`🔄 Using ${useMCP ? 'MCP streaming' : 'traditional'} endpoint for: "${message}"`);
+
+        let response;
+        if (useMCP) {
+            // Use MCP streaming endpoint
+            response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify({
+                    messages: conversationHistory.slice(-10), // Keep last 10 messages for context
+                    query: message
+                }),
+                signal: controller.signal
+            });
+        } else {
+            // Use traditional endpoint
+            response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message }),
+                signal: controller.signal
+            });
+        }
 
         if (!response.ok) {
             let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
@@ -103,18 +142,61 @@ async function sendMessage() {
             throw new Error(errorMessage);
         }
 
-        if (!response.body) {
-            throw new Error('No response body received from server');
+        if (useMCP && response.body) {
+            // Handle MCP streaming response
+            await handleMCPStreamingResponse(response, botMessageDiv, botMessageId);
+        } else {
+            // Handle traditional JSON response
+            const data = await response.json();
+            fullResponse = data.response || 'No response received';
+            
+            showTypingIndicator(false);
+            botMessageDiv = addMessage(formatResponse(fullResponse), 'bot', botMessageId);
+            
+            // Add assistant response to conversation history
+            conversationHistory.push({ role: 'assistant', content: fullResponse });
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        // Remove typing indicator when we start receiving real data
+    } catch (error) {
         showTypingIndicator(false);
-        botMessageDiv = addMessage('', 'bot', botMessageId);
+        console.error('Chat error:', error);
+        
+        let errorMessage = error.message;
+        if (error.name === 'AbortError') {
+            errorMessage = 'Request was cancelled.';
+        } else if (error.message.includes('Failed to fetch')) {
+            errorMessage = 'Unable to connect to the server. Please check your connection and try again.';
+        }
+        
+        addMessage(`❌ <strong>Error:</strong><br>${escapeHtml(errorMessage)}`, 'bot', botMessageId);
+    } finally {
+        // Reset UI state
+        currentStream = null;
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = 'Send';
+        input.focus();
+    }
+}
 
+// --- Handle MCP Streaming Response ---
+async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    let hasStartedResponse = false;
+    let progressDiv = null;
+
+    // Remove typing indicator when we start receiving real data
+    showTypingIndicator(false);
+    
+    // Create progress indicator for MCP
+    const progressId = 'mcp-progress-' + Date.now();
+    progressDiv = addMessage('<div class="mcp-progress">🔄 <em>Initializing MCP analysis...</em></div>', 'bot', progressId);
+    botMessageDiv = addMessage('', 'bot', botMessageId);
+
+    try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -143,25 +225,36 @@ async function sendMessage() {
                     }
 
                     if (eventType && eventData) {
-                        await handleStreamEvent(eventType, eventData, botMessageDiv, fullResponse);
+                        await handleMCPStreamEvent(eventType, eventData, botMessageDiv, progressDiv, fullResponse);
                         
-                        if (eventType === 'token') {
+                        if (eventType === 'result') {
+                            fullResponse = eventData.response || '';
                             if (!hasStartedResponse) {
                                 hasStartedResponse = true;
                                 botMessageDiv.innerHTML = ''; // Clear any loading content
                             }
-                            fullResponse += eventData.token;
-                            // Enhanced formatting for better readability
-                            botMessageDiv.innerHTML = formatResponse(fullResponse);
-                        } else if (eventType === 'result') {
-                            botMessageDiv.innerHTML = formatResponse(eventData.response);
+                            
+                            // Enhanced formatting for MCP results with visualization support
+                            botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
+                            
+                            // Add assistant response to conversation history
+                            conversationHistory.push({ role: 'assistant', content: fullResponse });
+                            
+                            // Remove progress indicator
+                            if (progressDiv) {
+                                progressDiv.remove();
+                                progressDiv = null;
+                            }
                             break;
                         } else if (eventType === 'done') {
+                            if (progressDiv) {
+                                progressDiv.remove();
+                            }
                             break;
                         }
                     }
                 } catch (parseError) {
-                    console.warn('Failed to parse event:', eventBlock, parseError);
+                    console.warn('Failed to parse MCP event:', eventBlock, parseError);
                     continue;
                 }
             }
@@ -172,53 +265,193 @@ async function sendMessage() {
             botMessageDiv.innerHTML = "I completed processing your request, but didn't generate a visible response. Please try rephrasing your question.";
         }
 
-    } catch (error) {
-        showTypingIndicator(false);
-        console.error('Chat error:', error);
-        
-        let errorMessage = error.message;
-        if (error.name === 'AbortError') {
-            errorMessage = 'Request was cancelled.';
-        } else if (error.message.includes('Failed to fetch')) {
-            errorMessage = 'Unable to connect to the server. Please check your connection and try again.';
-        }
-        
-        addMessage(`❌ <strong>Error:</strong><br>${escapeHtml(errorMessage)}`, 'bot', botMessageId);
     } finally {
-        // Reset UI state
-        currentStream = null;
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.innerHTML = 'Send';
-        input.focus();
+        if (progressDiv) {
+            progressDiv.remove();
+        }
     }
 }
 
-// --- Enhanced Stream Event Handling ---
-async function handleStreamEvent(eventType, eventData, messageDiv, currentResponse) {
+// --- Enhanced MCP Stream Event Handling ---
+async function handleMCPStreamEvent(eventType, eventData, messageDiv, progressDiv, currentResponse) {
     switch (eventType) {
         case 'progress':
-            if (eventData.message) {
-                messageDiv.innerHTML = `⏳ <em>${escapeHtml(eventData.message)}</em>`;
+            if (eventData.message && progressDiv) {
+                const icon = getMCPProgressIcon(eventData.step);
+                const iteration = eventData.iteration ? ` (${eventData.iteration}/${eventData.maxIterations || 'N/A'})` : '';
+                progressDiv.innerHTML = `<div class="mcp-progress">${icon} <em>${escapeHtml(eventData.message)}${iteration}</em></div>`;
             }
             break;
         case 'error':
-            throw new Error(eventData.error || 'Unknown stream error');
-        case 'token':
-            // Handled in main loop
-            break;
+            throw new Error(eventData.error || 'Unknown MCP stream error');
         case 'result':
-            // Final result - handled in main loop
+            // Handled in main loop
             break;
         case 'done':
             // Stream complete
             break;
         default:
-            console.debug('Unknown event type:', eventType, eventData);
+            console.debug('Unknown MCP event type:', eventType, eventData);
     }
 }
 
-// --- Response Formatting Helper ---
+// --- Get Progress Icon for MCP Steps ---
+function getMCPProgressIcon(step) {
+    const icons = {
+        'init': '🔌',
+        'tools': '🔍',
+        'tools-found': '🛠️',
+        'analysis-start': '🚀',
+        'iteration-start': '🔄',
+        'tools-executing': '⚙️',
+        'tool-executing': '🔧',
+        'tool-completed': '✅',
+        'tool-error': '❌',
+        'iteration-complete': '✨',
+        'complete': '🎉',
+        'max-iterations': '⏰'
+    };
+    return icons[step] || '📋';
+}
+
+// --- Enhanced Response Formatting for MCP Results ---
+function formatMCPResponse(text) {
+    if (!text) return '';
+    
+    let formatted = text
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // **bold**
+        .replace(/\*(.*?)\*/g, '<em>$1</em>') // *italic*
+        .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
+        .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
+
+    // Enhanced formatting for data tables and insights
+    formatted = formatDataTables(formatted);
+    formatted = formatVegaLiteSpecs(formatted);
+    
+    return formatted;
+}
+
+// --- Format Data Tables in Response ---
+function formatDataTables(text) {
+    // Look for table-like patterns and enhance them
+    const tableRegex = /(\|.+\|\s*\n\|[-:\s|]+\|\s*\n(?:\|.+\|\s*\n?)*)/g;
+    
+    return text.replace(tableRegex, (match) => {
+        const lines = match.trim().split('\n').filter(line => line.trim());
+        if (lines.length < 3) return match;
+        
+        try {
+            // Parse header
+            const headerCells = lines[0].split('|')
+                .map(cell => cell.trim())
+                .filter(cell => cell.length > 0);
+            
+            // Parse data rows (skip separator line)
+            const dataRows = lines.slice(2)
+                .filter(line => line.includes('|'))
+                .map(line => 
+                    line.split('|')
+                        .map(cell => cell.trim())
+                        .filter((cell, index, arr) => {
+                            return !(cell === '' && (index === 0 || index === arr.length - 1));
+                        })
+                );
+            
+            if (headerCells.length === 0 || dataRows.length === 0) {
+                return match;
+            }
+            
+            // Generate HTML table
+            let tableHtml = '<div class="data-table-wrapper"><table class="data-table">';
+            tableHtml += '<thead><tr>';
+            headerCells.forEach(header => {
+                tableHtml += `<th>${escapeHtml(header)}</th>`;
+            });
+            tableHtml += '</tr></thead><tbody>';
+            
+            dataRows.forEach(row => {
+                tableHtml += '<tr>';
+                row.forEach((cell, index) => {
+                    if (index < headerCells.length) {
+                        tableHtml += `<td>${escapeHtml(cell)}</td>`;
+                    }
+                });
+                tableHtml += '</tr>';
+            });
+            
+            tableHtml += '</tbody></table></div>';
+            return tableHtml;
+            
+        } catch (e) {
+            console.warn('Error formatting table:', e);
+            return match;
+        }
+    });
+}
+
+// --- Format Vega-Lite Specifications ---
+function formatVegaLiteSpecs(text) {
+    // Look for JSON code blocks that might contain Vega-Lite specs
+    const jsonBlockRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+    
+    return text.replace(jsonBlockRegex, (match, jsonContent) => {
+        try {
+            const parsed = JSON.parse(jsonContent);
+            
+            // Check if this looks like a Vega-Lite spec
+            if (parsed.$schema && parsed.$schema.includes('vega-lite') || 
+                (parsed.data && parsed.mark && parsed.encoding)) {
+                
+                // Create a placeholder for the visualization
+                const vizId = 'vega-viz-' + Math.random().toString(36).substr(2, 9);
+                
+                // We can't render Vega-Lite directly in this context, but we can 
+                // format it nicely and provide download/copy functionality
+                return `
+                    <div class="vega-lite-container">
+                        <div class="vega-lite-header">
+                            📊 <strong>Interactive Visualization</strong>
+                            <button onclick="copyVegaSpec('${vizId}')" class="copy-btn">Copy Spec</button>
+                        </div>
+                        <div class="vega-lite-spec" id="${vizId}" style="display: none;">${jsonContent}</div>
+                        <div class="vega-lite-preview">
+                            <em>Vega-Lite visualization specification generated. You can copy the spec above to use in your preferred visualization tool.</em>
+                        </div>
+                    </div>
+                `;
+            }
+        } catch (e) {
+            // Not valid JSON or not a Vega-Lite spec, return as-is
+        }
+        
+        return match;
+    });
+}
+
+// --- Copy Vega-Lite Specification ---
+function copyVegaSpec(vizId) {
+    const specElement = document.getElementById(vizId);
+    if (specElement) {
+        const spec = specElement.textContent;
+        navigator.clipboard.writeText(spec).then(() => {
+            // Show temporary success message
+            const button = event.target;
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            button.style.backgroundColor = '#28a745';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.backgroundColor = '';
+            }, 2000);
+        }).catch(err => {
+            console.error('Failed to copy:', err);
+            alert('Failed to copy to clipboard. Please copy manually.');
+        });
+    }
+}
+
+// --- Standard Response Formatting Helper ---
 function formatResponse(text) {
     if (!text) return '';
     
@@ -317,7 +550,7 @@ async function listAndSendDashboardDataSources() {
         }
         if (sendBtn) sendBtn.disabled = false;
 
-        addMessage(`✅ <strong>Ready!</strong><br>You can now ask questions about your data. The primary data source <strong>${escapeHtml(namesArray[0])}</strong> is active.<br><br>💡 <em>Try asking: "What are the total number of records?" or "Show me a summary of the data"</em>`, "bot");
+        addMessage(`✅ <strong>Ready!</strong><br>You can now ask questions about your data. The primary data source <strong>${escapeHtml(namesArray[0])}</strong> is active.<br><br>💡 <em>Try asking: "What insights can you provide?" or "Show me analytics for this data"</em><br><br>🚀 <strong>Pro tip:</strong> Use words like "insights", "analytics", "trends", or "visualizations" to activate advanced MCP-powered analysis!`, "bot");
 
     } catch (err) {
         console.error("Initialization error:", err);
