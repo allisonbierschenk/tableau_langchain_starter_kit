@@ -300,6 +300,7 @@ async def stream_chat_events(message: str, ds_metadata: Dict):
     """
     mcp_client = None
     
+    
     try:
         # Import here to avoid startup issues
         from langchain_openai import ChatOpenAI
