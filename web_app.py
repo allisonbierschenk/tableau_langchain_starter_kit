@@ -1,6 +1,6 @@
-# web_app.py - FINAL CORRECTED VERSION
-# This is a direct Python translation of the TypeScript example logic,
-# integrated with your existing Tableau authentication and frontend.
+# web_app.py - FINAL VERSION
+# This version correctly integrates your original authentication and frontend logic
+# with a direct Python translation of the working MCP TypeScript example.
 
 import os
 import json
@@ -9,7 +9,7 @@ import logging
 import datetime
 import traceback
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import requests
 import jwt
@@ -45,7 +45,7 @@ DATASOURCE_METADATA_STORE: Dict[str, Dict] = {}
 
 
 # ==============================================================================
-# === YOUR TABLEAU AUTHENTICATION & LOOKUP FUNCTIONS (UNCHANGED) ===
+# === YOUR TABLEAU AUTHENTICATION & LOOKUP FUNCTIONS (RESTORED & UNCHANGED) ===
 # ==============================================================================
 
 def get_user_regions(client_id: str) -> List[str]:
@@ -184,7 +184,6 @@ async def stream_chat_events(message: str, client_id: str):
         conversation_messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}]
 
         final_answer = ""
-        full_thought_process = ""
 
         # This iterative loop is a direct translation of the working TypeScript example
         for i in range(10): # Max 10 iterations
@@ -199,21 +198,23 @@ async def stream_chat_events(message: str, client_id: str):
             assistant_message = completion.choices[0].message
             conversation_messages.append(assistant_message.model_dump(exclude_none=True))
 
-            # If the AI responds with text, we can stream it as its "thought process"
+            # If the AI responds with text, it's part of its thought process or the final answer
             if assistant_message.content:
-                full_thought_process += assistant_message.content
-                yield sse_format("token", {"token": assistant_message.content})
+                # Stream these thoughts/answers as tokens
+                for char in assistant_message.content:
+                    yield sse_format("token", {"token": char})
+                    await asyncio.sleep(0.005) # Small delay for streaming effect
 
             # If there are no more tools to call, the loop is done
             if not assistant_message.tool_calls:
-                final_answer = assistant_message.content or full_thought_process or "I have finished processing."
+                final_answer = assistant_message.content or "Done."
                 break
 
             # Execute tool calls
+            yield sse_format("progress", {"message": f"Querying {datasource_name}..."})
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
-                yield sse_format("progress", {"message": f"Querying {datasource_name} via {tool_name}..."})
                 
                 try:
                     tool_result_content = mcp_client.call_tool(tool_name, tool_args).get('content')
@@ -222,7 +223,6 @@ async def stream_chat_events(message: str, client_id: str):
                     error_str = str(e)
                     conversation_messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": json.dumps({"error": error_str})})
 
-        # Send the final consolidated answer as a result event. Your script.js handles this.
         yield sse_format("result", {"response": final_answer})
 
     except Exception as e:
@@ -243,10 +243,11 @@ async def chat_endpoint(request: ChatRequest, fastapi_request: Request):
 async def receive_datasources(request: Request, body: DatasourceRequest):
     client_id = request.client.host
     try:
-        if not body.datasources:
+        datasources_map = body.datasources
+        if not datasources_map:
             raise HTTPException(status_code=400, detail="No data sources provided")
 
-        first_name = next(iter(body.datasources.keys()))
+        first_name = next(iter(datasources_map.keys()))
         user_regions = get_user_regions(client_id)
         tableau_username = get_tableau_username(client_id)
         
