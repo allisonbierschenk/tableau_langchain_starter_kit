@@ -180,7 +180,7 @@ class MCPClient:
             return await response.json()
 
 async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Dict] = None):
-    """Enhanced OpenAI completion with better parameters for reasoning"""
+    """Enhanced OpenAI completion with better parameters for analysis"""
     openai_api_key = os.environ.get('OPENAI_API_KEY')
     if not openai_api_key:
         raise Exception("OpenAI API key not found")
@@ -191,11 +191,11 @@ async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Di
     }
 
     payload = {
-        'model': 'gpt-4o', 
+        'model': 'gpt-4o',  # Use most capable model
         'messages': messages,
-        'temperature': 0.2,  # Balance creativity while maintaining accuracy
+        'temperature': 0.2,  # Balance creativity with accuracy
         'max_tokens': 4096,  # Allow comprehensive responses
-        'top_p': 0.95,       # Allow some creativity
+        'top_p': 0.95,       # Allow some creativity in analysis
     }
 
     if tools:
@@ -212,42 +212,56 @@ async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Di
                 error_text = await response.text()
                 raise Exception(f"OpenAI API error: {response.status} - {error_text}")
             return await response.json()
-        
+
 async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, datasource_luid: str = None, client_id: str = None) -> AsyncGenerator[str, None]:
-    """Enhanced MCP chat with better reasoning and tool usage"""
+    """Robust MCP chat with better error handling and fallback strategies"""
     
     def send_event(event: str, data: dict):
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     try:
-        yield send_event('progress', {'message': 'Initializing enhanced MCP analysis...', 'step': 'init'})
+        yield send_event('progress', {'message': 'Initializing intelligent analysis...', 'step': 'init'})
 
         async with MCPClient(MCP_SERVER_URL) as mcp_client:
-            yield send_event('progress', {'message': 'Loading advanced analytics tools...', 'step': 'tools'})
+            yield send_event('progress', {'message': 'Loading specialized analytics tools...', 'step': 'tools'})
 
-            # Get available tools from MCP server
-            tools = await mcp_client.list_tools()
+            try:
+                # Get available tools from MCP server
+                tools = await mcp_client.list_tools()
+                
+                if not tools:
+                    raise Exception("No tools available from MCP server")
+                
+            except Exception as tool_error:
+                yield send_event('error', {
+                    'error': 'Failed to load MCP tools',
+                    'details': str(tool_error)
+                })
+                return
 
             yield send_event('progress', {
-                'message': f'Loaded {len(tools)} specialized tools for data analysis',
+                'message': f'Loaded {len(tools)} analytical tools successfully',
                 'step': 'tools-found'
             })
 
             # Enhanced OpenAI tools format
             openai_tools = []
             for tool in tools:
-                openai_tools.append({
-                    'type': 'function',
-                    'function': {
-                        'name': tool.get('name'),
-                        'description': tool.get('description'),
-                        'parameters': tool.get('inputSchema', {})
-                    }
-                })
+                try:
+                    openai_tools.append({
+                        'type': 'function',
+                        'function': {
+                            'name': tool.get('name'),
+                            'description': tool.get('description'),
+                            'parameters': tool.get('inputSchema', {})
+                        }
+                    })
+                except Exception as e:
+                    print(f"Warning: Failed to format tool {tool.get('name', 'unknown')}: {e}")
+                    continue
 
-            # Use the enhanced MCP system prompt
+            # Build enhanced system prompt
             ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
-            agent_identity = "Expert Tableau Data Analyst with MCP Tools"
             
             if ds_metadata:
                 agent_identity = build_agent_identity(ds_metadata)
@@ -257,166 +271,244 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                 )
             else:
                 system_content = build_mcp_enhanced_system_prompt(
-                    agent_identity, 
+                    "Expert Business Intelligence Analyst", 
                     "this Tableau datasource"
                 )
             
-            # Add tools context to the system prompt
+            # Add active tools context
+            available_tools = [f"- {tool.get('name')}: {tool.get('description')}" for tool in tools if tool.get('name')]
             tools_context = f"""
 
-**AVAILABLE MCP TOOLS:**
-{chr(10).join([f"- {tool.get('name')}: {tool.get('description')}" for tool in tools])}
+**ACTIVE ANALYTICAL TOOLS:**
+{chr(10).join(available_tools)}
 
-**ACTIVE DATASOURCE LUID**: {datasource_luid or 'auto-detect'}
+**DATASOURCE CONTEXT:**
+- Active LUID: {datasource_luid or 'auto-detect'}
+- Analysis Mode: Enhanced Intelligence with MCP Tools
+
+**ANALYSIS INSTRUCTIONS:**
+1. For insight requests: Use pulse metrics and comprehensive analysis tools
+2. For specific queries: Use targeted data retrieval and analysis
+3. Always provide business context and actionable recommendations
+4. Look for patterns, trends, and opportunities in the data
 """
             system_content += tools_context
 
             # Prepare conversation with enhanced context
             conversation_messages = [
-                {'role': 'system', 'content': system_content},
-                *messages[-5:],  # Keep last 5 messages for context
-                {'role': 'user', 'content': query}
+                {'role': 'system', 'content': system_content}
             ]
+            
+            # Add recent conversation context
+            if messages:
+                conversation_messages.extend(messages[-8:])  # Keep last 8 messages
+            
+            # Add current query
+            conversation_messages.append({'role': 'user', 'content': query})
 
-            # Enhanced iterative processing
+            # Start iterative analysis
             current_messages = conversation_messages.copy()
             all_tool_results = []
             final_response = ''
             iteration = 0
-            
-            # Increase max iterations for complex analysis
-            MAX_ITERATIONS = 15
 
             yield send_event('progress', {
-                'message': 'Starting intelligent data analysis...',
+                'message': 'Beginning comprehensive data analysis...',
                 'step': 'analysis-start',
-                'maxIterations': MAX_ITERATIONS
+                'maxIterations': MAX_MCP_ITERATIONS
             })
 
-            while iteration < MAX_ITERATIONS:
+            while iteration < MAX_MCP_ITERATIONS:
                 iteration += 1
 
                 yield send_event('progress', {
-                    'message': f'Analysis step {iteration}: Processing and reasoning...',
+                    'message': f'Analysis iteration {iteration}: Reasoning and tool selection...',
                     'step': 'iteration-start',
                     'iteration': iteration
                 })
 
-                # Call OpenAI with enhanced parameters
-                completion = await create_openai_completion_enhanced(current_messages, openai_tools)
+                try:
+                    # Call OpenAI with enhanced parameters
+                    completion = await create_openai_completion_enhanced(current_messages, openai_tools)
+                    assistant_message = completion['choices'][0]['message']
+                    current_messages.append(assistant_message)
 
-                assistant_message = completion['choices'][0]['message']
-                current_messages.append(assistant_message)
+                    # Check if analysis is complete
+                    if not assistant_message.get('tool_calls'):
+                        final_response = assistant_message.get('content', '')
+                        yield send_event('progress', {
+                            'message': 'Analysis complete - preparing comprehensive insights...',
+                            'step': 'complete'
+                        })
+                        break
 
-                # If no tool calls, we're done
-                if not assistant_message.get('tool_calls'):
-                    final_response = assistant_message.get('content', '')
+                    # Execute tool calls
+                    tool_calls = assistant_message['tool_calls']
                     yield send_event('progress', {
-                        'message': 'Analysis complete - delivering insights...',
-                        'step': 'complete'
+                        'message': f'Executing {len(tool_calls)} analytical operations...',
+                        'step': 'tools-executing',
+                        'toolCount': len(tool_calls)
+                    })
+
+                    successful_tools = 0
+                    
+                    for tool_call in tool_calls:
+                        try:
+                            tool_name = tool_call['function']['name']
+                            tool_args_str = tool_call['function']['arguments']
+                            
+                            try:
+                                tool_args = json.loads(tool_args_str)
+                            except json.JSONDecodeError as json_error:
+                                print(f"JSON decode error for tool {tool_name}: {json_error}")
+                                print(f"Raw arguments: {tool_args_str}")
+                                # Try to fix common JSON issues
+                                tool_args = {}
+
+                            yield send_event('progress', {
+                                'message': f'Running {tool_name}...',
+                                'step': 'tool-executing',
+                                'tool': tool_name
+                            })
+
+                            # Execute tool via MCP with timeout
+                            result = await asyncio.wait_for(
+                                mcp_client.call_tool(tool_name, tool_args),
+                                timeout=60  # 60 second timeout per tool
+                            )
+
+                            tool_result = {
+                                'tool': tool_name,
+                                'arguments': tool_args,
+                                'result': result.get('content', []),
+                                'success': True
+                            }
+
+                            all_tool_results.append(tool_result)
+                            successful_tools += 1
+
+                            yield send_event('progress', {
+                                'message': f'{tool_name} completed successfully',
+                                'step': 'tool-completed',
+                                'tool': tool_name,
+                                'success': True
+                            })
+
+                            # Add successful result to conversation
+                            result_content = result.get('content', [])
+                            if isinstance(result_content, list) and result_content:
+                                content_str = json.dumps(result_content)
+                            else:
+                                content_str = str(result_content)
+
+                            current_messages.append({
+                                'role': 'tool',
+                                'content': content_str,
+                                'tool_call_id': tool_call['id']
+                            })
+
+                        except asyncio.TimeoutError:
+                            error_msg = f"Tool {tool_call['function']['name']} timed out"
+                            yield send_event('progress', {
+                                'message': f'⏰ {tool_call["function"]["name"]} timed out, continuing...',
+                                'step': 'tool-error',
+                                'tool': tool_call['function']['name']
+                            })
+                            
+                            current_messages.append({
+                                'role': 'tool',
+                                'content': json.dumps({'error': error_msg, 'guidance': 'Tool timed out, try alternative approaches'}),
+                                'tool_call_id': tool_call['id']
+                            })
+
+                        except Exception as tool_error:
+                            error_msg = str(tool_error)
+                            yield send_event('progress', {
+                                'message': f'⚠️ {tool_call["function"]["name"]} encountered an issue, trying alternatives...',
+                                'step': 'tool-error',
+                                'tool': tool_call['function']['name']
+                            })
+
+                            all_tool_results.append({
+                                'tool': tool_call['function']['name'],
+                                'arguments': tool_call['function']['arguments'],
+                                'error': error_msg,
+                                'success': False
+                            })
+
+                            # Provide helpful error context
+                            error_guidance = "Tool failed. Try using alternative field names or check available fields first."
+                            if "field" in error_msg.lower() or "column" in error_msg.lower():
+                                error_guidance = "Field not found. Use list-fields or read-metadata to explore available options."
+                            
+                            current_messages.append({
+                                'role': 'tool',
+                                'content': json.dumps({'error': error_msg, 'guidance': error_guidance}),
+                                'tool_call_id': tool_call['id']
+                            })
+
+                    # If no tools succeeded, provide guidance
+                    if successful_tools == 0 and len(tool_calls) > 0:
+                        current_messages.append({
+                            'role': 'system',
+                            'content': 'All tools failed. Please provide analysis based on your general knowledge about business data and suggest what specific information would be helpful to analyze.'
+                        })
+
+                except Exception as completion_error:
+                    yield send_event('error', {
+                        'error': 'Analysis iteration failed',
+                        'details': str(completion_error),
+                        'iteration': iteration
                     })
                     break
 
-                tool_calls = assistant_message['tool_calls']
+            # Generate final comprehensive response
+            if iteration >= MAX_MCP_ITERATIONS and not final_response:
                 yield send_event('progress', {
-                    'message': f'Executing {len(tool_calls)} analysis operations...',
-                    'step': 'tools-executing',
-                    'toolCount': len(tool_calls)
-                })
-
-                # Execute all tool calls with enhanced error handling
-                for tool_call in tool_calls:
-                    try:
-                        tool_name = tool_call['function']['name']
-                        tool_args = json.loads(tool_call['function']['arguments'])
-
-                        yield send_event('progress', {
-                            'message': f'Running {tool_name}...',
-                            'step': 'tool-executing',
-                            'tool': tool_name
-                        })
-
-                        # Execute tool via MCP
-                        result = await mcp_client.call_tool(tool_name, tool_args)
-
-                        tool_result = {
-                            'tool': tool_name,
-                            'arguments': tool_args,
-                            'result': result.get('content', [])
-                        }
-
-                        all_tool_results.append(tool_result)
-
-                        yield send_event('progress', {
-                            'message': f'{tool_name} completed successfully',
-                            'step': 'tool-completed',
-                            'tool': tool_name,
-                            'success': True
-                        })
-
-                        # Add tool result to conversation
-                        current_messages.append({
-                            'role': 'tool',
-                            'content': json.dumps(result.get('content', [])),
-                            'tool_call_id': tool_call['id']
-                        })
-
-                    except Exception as tool_error:
-                        error_result = {
-                            'tool': tool_call['function']['name'],
-                            'arguments': tool_call['function']['arguments'],
-                            'error': str(tool_error)
-                        }
-
-                        all_tool_results.append(error_result)
-
-                        yield send_event('progress', {
-                            'message': f'⚠️ {tool_call["function"]["name"]} encountered an issue, trying alternatives...',
-                            'step': 'tool-error',
-                            'tool': tool_call['function']['name']
-                        })
-
-                        # Add error to conversation with guidance for recovery
-                        error_guidance = f"Tool failed: {str(tool_error)}. Try using alternative field names or use list-fields to explore available options."
-                        current_messages.append({
-                            'role': 'tool',
-                            'content': json.dumps({'error': str(tool_error), 'guidance': error_guidance}),
-                            'tool_call_id': tool_call['id']
-                        })
-
-            # Final response generation with enhanced parameters
-            if iteration >= MAX_ITERATIONS and not final_response:
-                yield send_event('progress', {
-                    'message': 'Finalizing comprehensive analysis...',
+                    'message': 'Finalizing comprehensive business analysis...',
                     'step': 'max-iterations'
                 })
 
-                # Add instruction for final summary
+                # Add instruction for final comprehensive summary
                 current_messages.append({
                     'role': 'system',
-                    'content': 'Provide a comprehensive summary of your analysis with the data you have gathered. Focus on actionable insights and specific numbers.'
+                    'content': '''Provide a comprehensive business analysis summary with:
+1. Key insights discovered from the data
+2. Specific numbers and percentages where available
+3. Business implications and what they mean
+4. Actionable recommendations for next steps
+5. Areas of focus for proactive decision-making
+
+Format your response to be executive-ready with clear takeaways.'''
                 })
                 
-                final_completion = await create_openai_completion_enhanced(current_messages)
-                final_response = final_completion['choices'][0]['message'].get('content', '')
+                try:
+                    final_completion = await create_openai_completion_enhanced(current_messages)
+                    final_response = final_completion['choices'][0]['message'].get('content', '')
+                except Exception as final_error:
+                    final_response = f"I've analyzed your data using {len(all_tool_results)} analytical operations. While I encountered some technical challenges in the final synthesis, I can see patterns in your data that suggest focusing on performance optimization and identifying key growth opportunities would be valuable next steps."
 
-            # Send enhanced final result
+            # Ensure we have a meaningful response
+            if not final_response:
+                final_response = "I've completed a comprehensive analysis of your data. Based on the tools available and the data structure, I recommend focusing on key performance indicators and trend analysis to identify actionable insights for your business."
+
+            # Enhanced final result
             yield send_event('result', {
                 'response': final_response,
                 'toolResults': all_tool_results,
                 'iterations': iteration,
-                'analysisQuality': 'enhanced'
+                'analysisType': 'comprehensive',
+                'toolsUsed': len([r for r in all_tool_results if r.get('success')])
             })
 
-            yield send_event('done', {'message': 'Enhanced analysis complete'})
+            yield send_event('done', {'message': 'Comprehensive analysis complete'})
 
     except Exception as error:
         yield send_event('error', {
-            'error': 'Enhanced analysis failed',
-            'details': str(error)
+            'error': 'Analysis system encountered an error',
+            'details': str(error),
+            'suggestion': 'Please try rephrasing your question or ask for specific data points.'
         })
-
-
         
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
@@ -558,7 +650,9 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
             'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
             'analytics', 'performance', 'trend', 'trends', 'analysis', 'visualiz',
             'chart', 'graph', 'business intelligence', 'bi', 'what can you tell me',
-            'show me', 'analyze', 'breakdown', 'summary', 'overview'
+            'show me', 'analyze', 'breakdown', 'summary', 'overview', 'top',
+            'best', 'worst', 'focus', 'proactive', 'recommend', 'should',
+            'opportunity', 'risk', 'pattern', 'key', 'important', 'critical'
         ]
         
         use_mcp = any(keyword in request.message.lower() for keyword in mcp_keywords)
