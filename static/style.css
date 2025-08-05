@@ -21,7 +21,7 @@ body {
     width: 60px;
     height: 60px;
     border-radius: 50%;
-    background: linear-gradient(45deg, #4CAF50, #45a049);
+    background: linear-gradient(45deg, #03050a, #0a1632);
     border: none;
     color: white;
     font-size: 24px;
@@ -420,7 +420,7 @@ a:hover {
 
 /* Success States */
 .message.bot.success {
-    border-color: #48bb78;
+    border-color: #03050a;
     background: #f0fff4;
     color: #2d3748;
 }
