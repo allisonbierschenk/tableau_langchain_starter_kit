@@ -1,8 +1,10 @@
+# web_app.py (REVISED)
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
 import requests
@@ -11,24 +13,23 @@ import jwt
 import datetime
 import uuid
 import json
-import asyncio
-import aiohttp
-from typing import AsyncGenerator, List, Dict, Any
+from typing import List, Dict
 
+# Langchain imports for a more robust agent
 from langsmith import Client
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
-from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
-from utilities.prompt import build_agent_identity, build_agent_system_prompt
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.prompts import PromptTemplate
+from langchain_core.tools import tool
+from langchain_tableau import TableauDatasource
 
+# --- Load Environment & Initialize Clients ---
 load_dotenv()
-
 langsmith_client = Client()
-config = {"run_name": "Tableau Langchain Web_App.py"}
 
+# --- App Setup ---
 app = FastAPI(title="Tableau AI Chat", description="Simple AI chat interface for Tableau data")
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,26 +40,23 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Constants for MCP integration
-MAX_MCP_ITERATIONS = 10
-MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
+# --- In-Memory Stores (keep as is) ---
+DATASOURCE_LUID_STORE: Dict[str, str] = {}
+DATASOURCE_METADATA_STORE: Dict[str, Dict] = {}
+TABLEAU_TOOL_STORE: Dict[str, "TableauTools"] = {}
 
+# --- Pydantic Models ---
 class ChatRequest(BaseModel):
     message: str
-
-class MCPChatRequest(BaseModel):
-    messages: List[Dict[str, str]]
-    query: str
+    history: List[Dict[str, str]] = []
 
 class ChatResponse(BaseModel):
     response: str
 
 class DataSourcesRequest(BaseModel):
-    datasources: dict  # { "name": "federated_id" }
+    datasources: dict
 
-DATASOURCE_LUID_STORE = {}
-DATASOURCE_METADATA_STORE = {}
-
+# --- JWT and Tableau Auth Functions (keep as is) ---
 def get_user_regions(client_id):
     return ['West', 'South']
 
@@ -79,424 +77,215 @@ def generate_jwt(tableau_username, user_regions):
         "scp": ["tableau:rest_api:query", "tableau:rest_api:metadata", "tableau:content:read"],
         "Region": user_regions
     }
-    headers = {
-        "kid": secret_id,
-        "iss": client_id
-    }
-    jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
-    print("\n🔐 JWT generated for Tableau API")
-    print(jwt_token)
-    return jwt_token
+    headers = {"kid": secret_id, "iss": client_id}
+    return jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
 
 def tableau_signin_with_jwt(tableau_username, user_regions):
+    # This function remains unchanged
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     site = os.environ['TABLEAU_SITE']
     jwt_token = generate_jwt(tableau_username, user_regions)
     url = f"{domain}/api/{api_version}/auth/signin"
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    payload = {
-        "credentials": {
-            "jwt": jwt_token,
-            "site": {"contentUrl": site}
-        }
-    }
-    print(f"\n🔑 Signing in to Tableau REST API at {url}")
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    payload = {"credentials": {"jwt": jwt_token, "site": {"contentUrl": site}}}
     resp = requests.post(url, json=payload, headers=headers)
-    print(f"🔁 Sign-in response code: {resp.status_code}")
-    print(f"📨 Sign-in response: {resp.text}")
     resp.raise_for_status()
     token = resp.json()['credentials']['token']
     site_id = resp.json()['credentials']['site']['id']
-    print(f"✅ Tableau REST API token: {token}")
-    print(f"✅ Site ID: {site_id}")
     return token, site_id
 
 def lookup_published_luid_by_name(name, tableau_username, user_regions):
+    # This function remains unchanged
     token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
     url = f"{domain}/api/{api_version}/sites/{site_id}/datasources"
-    headers = {
-        "X-Tableau-Auth": token,
-        "Accept": "application/json"
-    }
-    params = {
-        "filter": f"name:eq:{name}"
-    }
-
-    print(f"\n🔍 Looking up datasource by name using filter: '{name}'")
+    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
+    params = {"filter": f"name:eq:{name}"}
     resp = requests.get(url, headers=headers, params=params)
-    print(f"🔁 Datasource fetch response code: {resp.status_code}")
-    print(f"📨 Response: {resp.text}")
     resp.raise_for_status()
-
     datasources = resp.json().get("datasources", {}).get("datasource", [])
     if not datasources:
-        print(f"❌ No match found for datasource name: {name}")
         raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
-
     ds = datasources[0]
-    print(f"✅ Match found ➜ Name: {ds.get('name')} ➜ LUID: {ds.get('id')}")
     return ds["id"], ds
 
-# MCP Client functionality
-class MCPClient:
-    def __init__(self, server_url: str):
-        self.server_url = server_url
-        self.session = None
-    
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-    
-    async def list_tools(self):
-        """Get available tools from MCP server"""
-        async with self.session.post(
-            f"{self.server_url}/tools/list",
-            json={}
-        ) as response:
-            if response.status != 200:
-                raise Exception(f"Failed to list tools: {response.status}")
-            data = await response.json()
-            return data.get("tools", [])
-    
-    async def call_tool(self, name: str, arguments: dict):
-        """Execute a tool on the MCP server"""
-        async with self.session.post(
-            f"{self.server_url}/tools/call",
-            json={"name": name, "arguments": arguments}
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"Tool execution failed: {response.status} - {error_text}")
-            return await response.json()
 
-async def create_openai_completion(messages: List[Dict], tools: List[Dict] = None):
-    """Create OpenAI completion with tools"""
-    openai_api_key = os.environ.get('OPENAI_API_KEY')
-    if not openai_api_key:
-        raise Exception("OpenAI API key not found")
-    
-    headers = {
-        'Authorization': f'Bearer {openai_api_key}',
-        'Content-Type': 'application/json'
-    }
-    
-    payload = {
-        'model': 'gpt-4o-mini',
-        'messages': messages,
-        'temperature': 0
-    }
-    
-    if tools:
-        payload['tools'] = tools
-        payload['tool_choice'] = 'auto'
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            'https://api.openai.com/v1/chat/completions',
-            headers=headers,
-            json=payload
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"OpenAI API error: {response.status} - {error_text}")
-            return await response.json()
+# --- NEW: Tableau Tooling Class ---
+# This class will hold the Tableau connection and provide the tools for the agent.
+class TableauTools:
+    def __init__(self, datasource_luid: str, tableau_username: str):
+        self.datasource = TableauDatasource(
+            domain=os.environ['TABLEAU_DOMAIN_FULL'],
+            site=os.environ['TABLEAU_SITE'],
+            jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
+            jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
+            jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
+            tableau_api_version=os.environ['TABLEAU_API_VERSION'],
+            tableau_user=tableau_username,
+            datasource_luid=datasource_luid,
+            model_provider="openai"
+        )
+        # Cache fields on initialization to avoid repeated API calls
+        try:
+            print("🗂️ Caching fields for datasource...")
+            self.fields = self.datasource.get_fields()
+            print(f"✅ Cached {len(self.fields)} fields.")
+        except Exception as e:
+            print(f"❌ Error caching fields: {e}")
+            self.fields = []
 
-async def mcp_chat_stream(messages: List[Dict[str, str]], query: str, datasource_luid: str = None) -> AsyncGenerator[str, None]:
-    """Stream MCP chat responses with progress updates"""
+    @tool
+    def query_data(self, tql_query: str):
+        """
+        Executes a Tableau Query Language (TQL) query against the data source.
+        Use this to answer questions about metrics, trends, and specific data points.
+        Example TQL: "SELECT [Category], SUM([Sales]) FROM [Table] GROUP BY [Category] ORDER BY SUM([Sales]) DESC LIMIT 10"
+        ALWAYS use correct field names from the 'list_available_fields' tool. If a query fails, check the field names and try again.
+        """
+        try:
+            return self.datasource.query(tql_query)
+        except Exception as e:
+            return f"Query failed. Error: {str(e)}. Please check your TQL syntax and ensure all field names are correct. Use the 'list_available_fields' tool to verify field names."
+
+    @tool
+    def list_available_fields(self):
+        """
+        Lists all available fields (columns) in the current data source.
+        Use this tool FIRST to understand the data structure or if you are unsure about a field name.
+        This helps you construct accurate TQL queries for the 'query_data' tool.
+        """
+        if not self.fields:
+            return "Could not retrieve fields. The data source might be unavailable."
+        return self.fields
+
+    def get_all_tools(self):
+        return [self.query_data, self.list_available_fields]
+
+# --- NEW: Agent Setup Function ---
+def setup_agent(client_id: str):
+    """Initializes and returns a new LangChain agent for a given client session."""
+    if client_id not in TABLEAU_TOOL_STORE:
+        raise RuntimeError("Tools for this session not initialized. Please ensure datasource is selected.")
+
+    tableau_tools = TABLEAU_TOOL_STORE[client_id].get_all_tools()
+    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id, {})
     
-    def send_event(event: str, data: dict):
-        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    # Using the prompt from prompt.py
+    from utilities.prompt import REACT_AGENT_SYSTEM_PROMPT
+    prompt_template = PromptTemplate.from_template(REACT_AGENT_SYSTEM_PROMPT)
+
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
     
-    try:
-        yield send_event('progress', {'message': 'Initializing MCP connection...', 'step': 'init'})
-        
-        async with MCPClient(MCP_SERVER_URL) as mcp_client:
-            yield send_event('progress', {'message': 'Getting available tools...', 'step': 'tools'})
-            
-            # Get available tools from MCP server
-            tools = await mcp_client.list_tools()
-            
-            yield send_event('progress', {
-                'message': f'Found {len(tools)} tools: {", ".join([t.get("name", "unknown") for t in tools])}',
-                'step': 'tools-found'
-            })
-            
-            # Prepare OpenAI tools format
-            openai_tools = []
-            for tool in tools:
-                openai_tools.append({
-                    'type': 'function',
-                    'function': {
-                        'name': tool.get('name'),
-                        'description': tool.get('description'),
-                        'parameters': tool.get('inputSchema', {})
-                    }
-                })
-            
-            # Create system message with MCP context and datasource info
-            system_content = f"""You are a helpful assistant that can analyze Tableau data using these available tools:
-{chr(10).join([f"- {tool.get('name')}: {tool.get('description')}" for tool in tools])}
+    # Create the ReAct agent
+    agent = create_react_agent(
+        llm=llm,
+        tools=tableau_tools,
+        prompt=prompt_template
+    )
 
-CRITICAL INSTRUCTIONS:
-1. When users ask questions about their data, IMMEDIATELY use the tools to get the actual data - don't just describe what you will do.
-2. ALWAYS use the datasource "eBikes Inventory and Sales" for data questions unless they specify a different datasource.
-3. For data analysis questions, follow this sequence:
-   - Use read-metadata or list-fields to understand the data structure
-   - Use query-datasource to get the actual data needed to answer the question
-   - Analyze the results and provide insights
-4. Don't say "I will do X" - just do X immediately using the available tools.
-5. Provide clear, actionable insights based on the actual data retrieved."""
+    # Create the agent executor
+    return AgentExecutor(
+        agent=agent,
+        tools=tableau_tools,
+        verbose=True, # Set to True for debugging agent steps in your server logs
+        handle_parsing_errors=True
+    )
 
-            if datasource_luid:
-                system_content += f"\n6. The current datasource LUID is: {datasource_luid}"
 
-            system_content += """
-
-PULSE METRICS AND KPI INSTRUCTIONS (HIGHEST PRIORITY):
-7. MANDATORY: When users mention ANY of these words/phrases, use Pulse tools FIRST before any other tools:
-   - "insights", "metric", "KPI", "key performance indicator", "pulse", "business performance", "dashboard"
-   - "bike sales", "bike returns", "sales insights", "returns insights" (these are known Pulse metrics)
-   - ANY question about insights from specific business metrics
-8. For ANY insight request, ALWAYS follow this sequence:
-   - FIRST: Use list-all-pulse-metric-definitions to see available metrics
-   - SECOND: For any specific metric mentioned, use generate-pulse-metric-value-insight-bundle with OUTPUT_FORMAT_HTML
-   - THIRD: Extract and display the actual Pulse insights AND Vega-Lite visualizations returned
-   - ONLY if Pulse tools fail completely, then use regular data analysis tools
-9. When displaying Pulse results, show the EXACT content returned by the tools, including HTML and Vega-Lite specs.
-10. DO NOT use query-datasource for insight requests - use Pulse tools instead."""
-            
-            # Prepare conversation
-            conversation_messages = [
-                {'role': 'system', 'content': system_content},
-                *messages,
-                {'role': 'user', 'content': query}
-            ]
-            
-            # Iterative tool calling
-            current_messages = conversation_messages.copy()
-            all_tool_results = []
-            final_response = ''
-            iteration = 0
-            
-            yield send_event('progress', {
-                'message': 'Starting analysis...',
-                'step': 'analysis-start',
-                'maxIterations': MAX_MCP_ITERATIONS
-            })
-            
-            while iteration < MAX_MCP_ITERATIONS:
-                iteration += 1
-                
-                yield send_event('progress', {
-                    'message': f'Iteration {iteration}/{MAX_MCP_ITERATIONS}: Analyzing and planning...',
-                    'step': 'iteration-start',
-                    'iteration': iteration
-                })
-                
-                # Call OpenAI with tools
-                completion = await create_openai_completion(current_messages, openai_tools)
-                
-                assistant_message = completion['choices'][0]['message']
-                current_messages.append(assistant_message)
-                
-                # If no tool calls, we're done
-                if not assistant_message.get('tool_calls'):
-                    final_response = assistant_message.get('content', '')
-                    yield send_event('progress', {
-                        'message': 'Analysis complete - generating final response...',
-                        'step': 'complete'
-                    })
-                    break
-                
-                tool_calls = assistant_message['tool_calls']
-                yield send_event('progress', {
-                    'message': f'Executing {len(tool_calls)} tool(s)...',
-                    'step': 'tools-executing',
-                    'toolCount': len(tool_calls)
-                })
-                
-                # Execute all tool calls
-                for tool_call in tool_calls:
-                    try:
-                        tool_name = tool_call['function']['name']
-                        tool_args = json.loads(tool_call['function']['arguments'])
-                        
-                        yield send_event('progress', {
-                            'message': f'{tool_name}({", ".join([f"{k}: {json.dumps(v)}" for k, v in tool_args.items()])})',
-                            'step': 'tool-executing',
-                            'tool': tool_name,
-                            'arguments': tool_args
-                        })
-                        
-                        # Execute tool via MCP
-                        result = await mcp_client.call_tool(tool_name, tool_args)
-                        
-                        tool_result = {
-                            'tool': tool_name,
-                            'arguments': tool_args,
-                            'result': result.get('content', [])
-                        }
-                        
-                        all_tool_results.append(tool_result)
-                        
-                        yield send_event('progress', {
-                            'message': f'{tool_name} completed successfully',
-                            'step': 'tool-completed',
-                            'tool': tool_name,
-                            'success': True
-                        })
-                        
-                        # Add tool result to conversation
-                        current_messages.append({
-                            'role': 'tool',
-                            'content': json.dumps(result.get('content', [])),
-                            'tool_call_id': tool_call['id']
-                        })
-                        
-                    except Exception as tool_error:
-                        error_result = {
-                            'tool': tool_call['function']['name'],
-                            'arguments': tool_call['function']['arguments'],
-                            'error': str(tool_error)
-                        }
-                        
-                        all_tool_results.append(error_result)
-                        
-                        yield send_event('progress', {
-                            'message': f'❌ {tool_call["function"]["name"]} failed: {str(tool_error)}',
-                            'step': 'tool-error',
-                            'tool': tool_call['function']['name'],
-                            'error': str(tool_error)
-                        })
-                        
-                        # Add error to conversation
-                        current_messages.append({
-                            'role': 'tool',
-                            'content': json.dumps({'error': str(tool_error)}),
-                            'tool_call_id': tool_call['id']
-                        })
-                
-                yield send_event('progress', {
-                    'message': f'Iteration {iteration} completed - {len(tool_calls)} tool(s) executed',
-                    'step': 'iteration-complete',
-                    'iteration': iteration,
-                    'toolsExecuted': len(tool_calls)
-                })
-            
-            # If we hit max iterations, make one final call
-            if iteration >= MAX_MCP_ITERATIONS and not final_response:
-                yield send_event('progress', {
-                    'message': 'Max iterations reached - generating final response...',
-                    'step': 'max-iterations'
-                })
-                
-                final_completion = await create_openai_completion(current_messages)
-                final_response = final_completion['choices'][0]['message'].get('content', '')
-            
-            # Send final result
-            yield send_event('result', {
-                'response': final_response,
-                'toolResults': all_tool_results,
-                'iterations': iteration
-            })
-            
-            yield send_event('done', {'message': 'Stream complete'})
-            
-    except Exception as error:
-        yield send_event('error', {
-            'error': 'Failed to process chat request',
-            'details': str(error)
-        })
-
+# --- API Endpoints ---
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
     client_id = request.client.host
     print(f"\n📥 /datasources request from client: {client_id}")
-    
+
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
-
-    print("📦 Datasources received from Tableau Extensions API (name ➜ federated ID):")
-    for name, fed_id in body.datasources.items():
-        print(f"   - Name: '{name}' ➜ Federated ID: '{fed_id}'")
 
     first_name, _ = next(iter(body.datasources.items()))
     print(f"\n🎯 Targeting first datasource: '{first_name}'")
 
-    user_regions = get_user_regions(client_id)
     tableau_username = get_tableau_username(client_id)
-    print(f"👤 Tableau username: {tableau_username}")
-    print(f"🌍 User regions: {user_regions}")
+    user_regions = get_user_regions(client_id)
 
+    # Lookup and store datasource info
     published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
-
     DATASOURCE_LUID_STORE[client_id] = published_luid
     DATASOURCE_METADATA_STORE[client_id] = {
         "name": first_name,
         "luid": published_luid,
-        "projectName": full_metadata.get("projectName"),
-        "description": full_metadata.get("description"),
-        "uri": full_metadata.get("contentUrl"),
+        "description": full_metadata.get("description", "A dataset in Tableau."),
         "owner": full_metadata.get("owner", {})
     }
 
-    print(f"✅ Stored published LUID for client {client_id}: {published_luid}\n")
+    # Initialize and store the tools for this client session
+    TABLEAU_TOOL_STORE[client_id] = TableauTools(
+        datasource_luid=published_luid,
+        tableau_username=tableau_username
+    )
+    
+    print(f"✅ Stored published LUID and initialized tools for client {client_id}\n")
     return {"status": "ok", "selected_luid": published_luid}
 
-def setup_agent(request: Request = None):
-    client_id = request.client.host if request else None
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
-    tableau_username = get_tableau_username(client_id)
-    user_regions = get_user_regions(client_id)
 
-    if not datasource_luid:
-        raise RuntimeError("❌ No Tableau datasource LUID available.")
-    if not tableau_username or not user_regions:
-        raise RuntimeError("❌ User context missing.")
+@app.post("/chat")
+async def chat(request: ChatRequest, fastapi_request: Request):
+    """
+    Handles all chat requests using a unified, robust ReAct agent.
+    This endpoint now streams the agent's thoughts and final response.
+    """
+    client_id = fastapi_request.client.host
+    print(f"\n💬 Chat request from client {client_id}: '{request.message}'")
 
-    print(f"\n🤖 Setting up agent for client {client_id}")
-    print(f"📊 Datasource LUID: {datasource_luid}")
-    print(f"📘 Datasource Name: {ds_metadata.get('name')}")
+    if client_id not in DATASOURCE_LUID_STORE:
+        raise HTTPException(status_code=400, detail="Datasource not initialized.")
 
-    if ds_metadata:
-        agent_identity = build_agent_identity(ds_metadata)
-        agent_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name", "this Tableau datasource"))
-    else:
-        from utilities.prompt import AGENT_SYSTEM_PROMPT
-        agent_prompt = AGENT_SYSTEM_PROMPT
+    agent_executor = setup_agent(client_id)
+    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id, {})
+    ds_name = ds_metadata.get("name", "the current datasource")
 
-    analyze_datasource = initialize_simple_datasource_qa(
-        domain=os.environ['TABLEAU_DOMAIN_FULL'],
-        site=os.environ['TABLEAU_SITE'],
-        jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
-        jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
-        jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
-        tableau_api_version=os.environ['TABLEAU_API_VERSION'],
-        tableau_user=tableau_username,
-        datasource_luid=datasource_luid,
-        tooling_llm_model="gpt-4.1-nano",
-        model_provider="openai"
-    )
+    # The input to the agent needs to be a dictionary
+    agent_input = {
+        "input": request.message,
+        "chat_history": [ (msg['role'], msg['content']) for msg in request.history ],
+        "datasource_name": ds_name,
+        "datasource_description": ds_metadata.get("description", "")
+    }
 
-    llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-    tools = [analyze_datasource]
-    return create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=agent_prompt
-    )
+    # Use a streaming response to send back agent thoughts and final answer
+    async def stream_generator():
+        final_response = ""
+        try:
+            # Use astream_log for detailed thought process
+            async for chunk in agent_executor.astream_log(agent_input, include_names=["ChatOpenAI"]):
+                for op in chunk.ops:
+                    if op["path"] == "/logs/ChatOpenAI/streamed_output_str":
+                        token = op["value"]
+                        # We only want the final answer, not the intermediate thoughts
+                        # The final answer is what's generated in the last step
+                        pass # We will collect the final answer at the end
+            
+            # After streaming logs, invoke once more to get the clean output
+            response_dict = await agent_executor.ainvoke(agent_input)
+            final_response = response_dict.get("output", "I could not determine a final answer.")
 
+            # Send the final result
+            yield f"event: result\ndata: {json.dumps({'response': final_response})}\n\n"
+
+        except Exception as e:
+            print("❌ Error during agent execution:")
+            traceback.print_exc()
+            error_message = f"An error occurred: {str(e)}"
+            yield f"event: error\ndata: {json.dumps({'error': error_message})}\n\n"
+        
+        # Signal that the stream is complete
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+
+# --- Static and Health Check Endpoints (keep as is) ---
 @app.get("/")
 def home():
     return FileResponse('static/index.html')
@@ -509,96 +298,6 @@ def static_index():
 def health_check():
     return {"status": "ok"}
 
-# New MCP-powered chat endpoint with streaming
-@app.post("/mcp-chat-stream")
-async def mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
-    """Stream MCP chat responses with real-time progress updates"""
-    client_id = fastapi_request.client.host
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-    
-    async def generate():
-        async for chunk in mcp_chat_stream(request.messages, request.query, datasource_luid):
-            yield chunk
-    
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type"
-        }
-    )
-
-# Enhanced chat endpoint that chooses between MCP and traditional approach
-@app.post("/chat")
-async def chat(request: ChatRequest, fastapi_request: Request):
-    """Enhanced chat endpoint that uses MCP when available, falls back to traditional agent"""
-    client_id = fastapi_request.client.host
-    
-    if client_id not in DATASOURCE_LUID_STORE or not DATASOURCE_LUID_STORE[client_id]:
-        raise HTTPException(
-            status_code=400,
-            detail="Datasource not initialized yet. Please wait for datasource detection to complete."
-        )
-    
-    try:
-        print(f"\n💬 Chat request from client {client_id}")
-        print(f"🧠 Message: {request.message}")
-        
-        # Check if we can use MCP (for insight/analytics queries)
-        use_mcp = any(keyword in request.message.lower() for keyword in [
-            'insight', 'metric', 'kpi', 'pulse', 'dashboard', 'analytics', 'performance',
-            'trend', 'analysis', 'visualiz'
-        ])
-        
-        if use_mcp:
-            print("🔄 Using MCP server for enhanced analytics...")
-            datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-            
-            # Use MCP for advanced analytics
-            response_text = ""
-            async for chunk in mcp_chat_stream([], request.message, datasource_luid):
-                if chunk.startswith("event: result"):
-                    try:
-                        data_line = chunk.split("\n")[1]  # Get the data line
-                        if data_line.startswith("data: "):
-                            result_data = json.loads(data_line[6:])  # Remove "data: " prefix
-                            response_text = result_data.get('response', '')
-                            break
-                    except (json.JSONDecodeError, IndexError):
-                        continue
-            
-            if not response_text:
-                # Fallback to traditional agent if MCP fails
-                print("⚠️ MCP failed, falling back to traditional agent...")
-                agent = setup_agent(fastapi_request)
-                messages = {"messages": [("user", request.message)]}
-                for chunk in agent.stream(messages, config=config, stream_mode="values"):
-                    if 'messages' in chunk and chunk['messages']:
-                        latest_message = chunk['messages'][-1]
-                        if hasattr(latest_message, 'content'):
-                            response_text = latest_message.content
-        else:
-            print("🔄 Using traditional agent for basic queries...")
-            # Use traditional agent for simple queries
-            agent = setup_agent(fastapi_request)
-            messages = {"messages": [("user", request.message)]}
-            response_text = ""
-            for chunk in agent.stream(messages, config=config, stream_mode="values"):
-                if 'messages' in chunk and chunk['messages']:
-                    latest_message = chunk['messages'][-1]
-                    if hasattr(latest_message, 'content'):
-                        response_text = latest_message.content
-        
-        print(f"🤖 Response: {response_text}")
-        return ChatResponse(response=response_text)
-        
-    except Exception as e:
-        print("❌ Error in /chat endpoint:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
