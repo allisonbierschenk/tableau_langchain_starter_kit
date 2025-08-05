@@ -291,6 +291,7 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
 2. For specific queries: Use targeted data retrieval and analysis
 3. Always provide business context and actionable recommendations
 4. Look for patterns, trends, and opportunities in the data
+5. If field errors occur, try alternative field names or use metadata tools first
 """
             system_content += tools_context
 
@@ -436,10 +437,12 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                                 'success': False
                             })
 
-                            # Provide helpful error context
+                            # Provide helpful error context and suggest alternatives
                             error_guidance = "Tool failed. Try using alternative field names or check available fields first."
                             if "field" in error_msg.lower() or "column" in error_msg.lower():
                                 error_guidance = "Field not found. Use list-fields or read-metadata to explore available options."
+                            elif "unknown" in error_msg.lower():
+                                error_guidance = "Unknown field detected. Let me check available fields and try alternative names."
                             
                             current_messages.append({
                                 'role': 'tool',
@@ -451,7 +454,7 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                     if successful_tools == 0 and len(tool_calls) > 0:
                         current_messages.append({
                             'role': 'system',
-                            'content': 'All tools failed. Please provide analysis based on your general knowledge about business data and suggest what specific information would be helpful to analyze.'
+                            'content': 'All tools failed. Please provide analysis based on your general knowledge about business data and suggest what specific information would be helpful to analyze. Focus on providing actionable business insights even with limited data access.'
                         })
 
                 except Exception as completion_error:
@@ -530,20 +533,38 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     print(f"👤 Tableau username: {tableau_username}")
     print(f"🌍 User regions: {user_regions}")
 
-    published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
+    try:
+        published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
 
-    DATASOURCE_LUID_STORE[client_id] = published_luid
-    DATASOURCE_METADATA_STORE[client_id] = {
-        "name": first_name,
-        "luid": published_luid,
-        "projectName": full_metadata.get("projectName"),
-        "description": full_metadata.get("description"),
-        "uri": full_metadata.get("contentUrl"),
-        "owner": full_metadata.get("owner", {})
-    }
+        DATASOURCE_LUID_STORE[client_id] = published_luid
+        DATASOURCE_METADATA_STORE[client_id] = {
+            "name": first_name,
+            "luid": published_luid,
+            "projectName": full_metadata.get("projectName"),
+            "description": full_metadata.get("description"),
+            "uri": full_metadata.get("contentUrl"),
+            "owner": full_metadata.get("owner", {})
+        }
 
-    print(f"✅ Stored published LUID for client {client_id}: {published_luid}\n")
-    return {"status": "ok", "selected_luid": published_luid}
+        print(f"✅ Stored published LUID for client {client_id}: {published_luid}")
+        print(f"📊 Total clients with datasources: {len(DATASOURCE_LUID_STORE)}")
+        print(f"📋 Available clients: {list(DATASOURCE_LUID_STORE.keys())}")
+        
+        return {"status": "ok", "selected_luid": published_luid}
+        
+    except Exception as e:
+        print(f"❌ Error initializing datasource for client {client_id}: {str(e)}")
+        # Try to use existing datasource as fallback
+        if DATASOURCE_LUID_STORE:
+            fallback_client = list(DATASOURCE_LUID_STORE.keys())[0]
+            fallback_luid = DATASOURCE_LUID_STORE[fallback_client]
+            print(f"🔄 Using fallback datasource from client {fallback_client}: {fallback_luid}")
+            DATASOURCE_LUID_STORE[client_id] = fallback_luid
+            if fallback_client in DATASOURCE_METADATA_STORE:
+                DATASOURCE_METADATA_STORE[client_id] = DATASOURCE_METADATA_STORE[fallback_client]
+            return {"status": "ok", "selected_luid": fallback_luid, "fallback": True}
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to initialize datasource: {str(e)}")
 
 def setup_enhanced_agent(request: Request = None):
     client_id = request.client.host if request else None
@@ -574,28 +595,38 @@ def setup_enhanced_agent(request: Request = None):
             "this Tableau datasource"
         )
 
-    analyze_datasource = initialize_simple_datasource_qa(
-        domain=os.environ['TABLEAU_DOMAIN_FULL'],
-        site=os.environ['TABLEAU_SITE'],
-        jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
-        jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
-        jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
-        tableau_api_version=os.environ['TABLEAU_API_VERSION'],
-        tableau_user=tableau_username,
-        datasource_luid=datasource_luid,
-        tooling_llm_model="gpt-4o-mini",  # Use more capable model
-        model_provider="openai"
-    )
+    try:
+        analyze_datasource = initialize_simple_datasource_qa(
+            domain=os.environ['TABLEAU_DOMAIN_FULL'],
+            site=os.environ['TABLEAU_SITE'],
+            jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
+            jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
+            jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
+            tableau_api_version=os.environ['TABLEAU_API_VERSION'],
+            tableau_user=tableau_username,
+            datasource_luid=datasource_luid,
+            tooling_llm_model="gpt-4o-mini",  # Use more capable model
+            model_provider="openai"
+        )
 
-    # Use more capable LLM for reasoning
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)  # Upgrade from gpt-4.1
-    tools = [analyze_datasource]
-    
-    return create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=agent_prompt
-    )
+        # Use more capable LLM for reasoning
+        llm = ChatOpenAI(model="gpt-4o", temperature=0)  # Upgrade from gpt-4.1
+        tools = [analyze_datasource]
+        
+        return create_react_agent(
+            model=llm,
+            tools=tools,
+            prompt=agent_prompt
+        )
+    except Exception as e:
+        print(f"❌ Error setting up enhanced agent: {str(e)}")
+        # Return a basic agent with error handling
+        llm = ChatOpenAI(model="gpt-4o", temperature=0)
+        return create_react_agent(
+            model=llm,
+            tools=[],
+            prompt=agent_prompt
+        )
 
 @app.get("/")
 def home():
@@ -608,6 +639,53 @@ def static_index():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/debug/datasources")
+def debug_datasources():
+    """Debug endpoint to check datasource status"""
+    return {
+        "total_clients": len(DATASOURCE_LUID_STORE),
+        "clients": list(DATASOURCE_LUID_STORE.keys()),
+        "datasources": {
+            client_id: {
+                "luid": luid,
+                "metadata": DATASOURCE_METADATA_STORE.get(client_id, {})
+            }
+            for client_id, luid in DATASOURCE_LUID_STORE.items()
+        }
+    }
+
+@app.post("/debug/test-connection")
+async def test_connection(request: Request):
+    """Test endpoint to verify datasource connection"""
+    client_id = request.client.host
+    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
+    
+    if not datasource_luid:
+        return {"status": "error", "message": "No datasource found for client"}
+    
+    try:
+        tableau_username = get_tableau_username(client_id)
+        user_regions = get_user_regions(client_id)
+        
+        # Test the connection
+        token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
+        
+        return {
+            "status": "success",
+            "client_id": client_id,
+            "datasource_luid": datasource_luid,
+            "tableau_username": tableau_username,
+            "user_regions": user_regions,
+            "connection": "active"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "client_id": client_id,
+            "datasource_luid": datasource_luid
+        }
 
 @app.post("/mcp-chat-stream")
 async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
@@ -635,16 +713,36 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
     """Enhanced chat endpoint with improved reasoning and tool usage"""
     client_id = fastapi_request.client.host
 
-    if client_id not in DATASOURCE_LUID_STORE or not DATASOURCE_LUID_STORE[client_id]:
+    # Enhanced client tracking with better debugging
+    print(f"\n💬 Enhanced chat request from client {client_id}")
+    print(f"🧠 Message: {request.message}")
+    print(f"📊 Available datasources: {list(DATASOURCE_LUID_STORE.keys())}")
+    print(f"🔍 Client datasource: {DATASOURCE_LUID_STORE.get(client_id)}")
+
+    # Check if datasource is available
+    if client_id not in DATASOURCE_LUID_STORE:
+        print(f"❌ No datasource found for client {client_id}")
+        # Try to find any available datasource as fallback
+        if DATASOURCE_LUID_STORE:
+            fallback_client = list(DATASOURCE_LUID_STORE.keys())[0]
+            fallback_luid = DATASOURCE_LUID_STORE[fallback_client]
+            print(f"🔄 Using fallback datasource from client {fallback_client}: {fallback_luid}")
+            DATASOURCE_LUID_STORE[client_id] = fallback_luid
+            if fallback_client in DATASOURCE_METADATA_STORE:
+                DATASOURCE_METADATA_STORE[client_id] = DATASOURCE_METADATA_STORE[fallback_client]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Datasource not initialized yet. Please wait for datasource detection to complete."
+            )
+
+    if not DATASOURCE_LUID_STORE.get(client_id):
         raise HTTPException(
             status_code=400,
             detail="Datasource not initialized yet. Please wait for datasource detection to complete."
         )
 
     try:
-        print(f"\n💬 Enhanced chat request from client {client_id}")
-        print(f"🧠 Message: {request.message}")
-
         # Enhanced keyword detection for MCP usage
         mcp_keywords = [
             'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
@@ -652,7 +750,8 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
             'chart', 'graph', 'business intelligence', 'bi', 'what can you tell me',
             'show me', 'analyze', 'breakdown', 'summary', 'overview', 'top',
             'best', 'worst', 'focus', 'proactive', 'recommend', 'should',
-            'opportunity', 'risk', 'pattern', 'key', 'important', 'critical'
+            'opportunity', 'risk', 'pattern', 'key', 'important', 'critical',
+            'tell me about', 'what are', 'how are', 'which', 'where'
         ]
         
         use_mcp = any(keyword in request.message.lower() for keyword in mcp_keywords)
