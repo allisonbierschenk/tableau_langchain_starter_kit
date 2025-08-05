@@ -19,7 +19,7 @@ from langsmith import Client
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
-from utilities.prompt import build_agent_identity, build_enhanced_agent_system_prompt
+from utilities.prompt import build_agent_identity, build_enhanced_agent_system_prompt, build_mcp_enhanced_system_prompt
 
 load_dotenv()
 
@@ -213,7 +213,7 @@ async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Di
                 raise Exception(f"OpenAI API error: {response.status} - {error_text}")
             return await response.json()
         
-async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, datasource_luid: str = None) -> AsyncGenerator[str, None]:
+async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, datasource_luid: str = None, client_id: str = None) -> AsyncGenerator[str, None]:
     """Enhanced MCP chat with better reasoning and tool usage"""
     
     def send_event(event: str, data: dict):
@@ -245,65 +245,31 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                     }
                 })
 
-            # ENHANCED SYSTEM MESSAGE - This is the key improvement
-            system_content = f"""You are an expert Tableau data analyst with access to powerful analysis tools. Your mission is to provide immediate, intelligent insights using real data.
+            # Use the enhanced MCP system prompt
+            ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
+            agent_identity = "Expert Tableau Data Analyst with MCP Tools"
+            
+            if ds_metadata:
+                agent_identity = build_agent_identity(ds_metadata)
+                system_content = build_mcp_enhanced_system_prompt(
+                    agent_identity, 
+                    ds_metadata.get("name", "this Tableau datasource")
+                )
+            else:
+                system_content = build_mcp_enhanced_system_prompt(
+                    agent_identity, 
+                    "this Tableau datasource"
+                )
+            
+            # Add tools context to the system prompt
+            tools_context = f"""
 
-**CRITICAL SUCCESS PATTERNS:**
-
-1. **IMMEDIATE TOOL USAGE**: Never describe what you will do - just do it immediately
-2. **PROGRESSIVE INTELLIGENCE**: Build understanding step by step using tools
-3. **ERROR RECOVERY**: When tools fail, immediately try alternatives or explore available fields
-
-**AVAILABLE TOOLS:**
+**AVAILABLE MCP TOOLS:**
 {chr(10).join([f"- {tool.get('name')}: {tool.get('description')}" for tool in tools])}
 
-**MANDATORY EXECUTION RULES:**
-
-🔥 **FOR INSIGHT QUESTIONS** (containing: insights, analytics, trends, KPIs):
-1. IMMEDIATELY use `list-all-pulse-metric-definitions`
-2. IMMEDIATELY use `generate-pulse-metric-value-insight-bundle` for key metrics
-3. Present insights AND visualizations
-4. NO delays, NO explanations of what you'll do
-
-📊 **FOR DATA QUESTIONS** (totals, counts, breakdowns):
-1. IMMEDIATELY use `read-metadata` or `list-fields` if you need structure
-2. IMMEDIATELY use `query-datasource` with best-guess field names
-3. If query fails, IMMEDIATELY use `list-fields` and retry with correct names
-4. Present results in clear tables/summaries
-
-🚫 **FORBIDDEN BEHAVIORS:**
-- Saying "I will analyze..." - just analyze immediately
-- Asking permission to use tools - just use them
-- Generic responses without tool usage
-- Giving up after one failed query
-
-**INTELLIGENT FIELD MAPPING:**
-When users mention business terms, intelligently map to likely field names:
-- "agent" → try "Underwriter", "Agent Name", "Agent"
-- "premium" → try "GWP", "Gross Written Premium", "Premium"  
-- "policy" → try "Policy ID", "Number of policies", "Policy Count"
-
-**RESPONSE EXCELLENCE:**
-- Lead with actual data and numbers
-- Use tables and formatting for clarity
-- Always cite data source
-- Provide actionable insights
-- Suggest relevant follow-up questions
-
-**DATASOURCE CONTEXT:**
-- Default datasource: "eBikes Inventory and Sales" 
-- Current LUID: {datasource_luid or 'auto-detect'}
-- Always use actual field names from the data
-
-**EXAMPLE PERFECT INTERACTION:**
-User: "What are the total gross written premiums?"
-✅ PERFECT: [Immediately query for GWP total] → "According to the data, total gross written premiums are $794,904,732.13"
-❌ WRONG: "I'll help you find the total gross written premiums. Let me check..."
-
-Remember: You are not a helpful assistant who explains what you'll do. You are a data analyst who immediately delivers insights with actual data."""
-
-            if datasource_luid:
-                system_content += f"\n\n**ACTIVE DATASOURCE LUID**: {datasource_luid}"
+**ACTIVE DATASOURCE LUID**: {datasource_luid or 'auto-detect'}
+"""
+            system_content += tools_context
 
             # Prepare conversation with enhanced context
             conversation_messages = [
@@ -449,6 +415,8 @@ Remember: You are not a helpful assistant who explains what you'll do. You are a
             'error': 'Enhanced analysis failed',
             'details': str(error)
         })
+
+
         
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
@@ -556,7 +524,7 @@ async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_req
     datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
 
     async def generate():
-        async for chunk in mcp_chat_stream_enhanced(request.messages, request.query, datasource_luid):
+        async for chunk in mcp_chat_stream_enhanced(request.messages, request.query, datasource_luid, client_id):
             yield chunk
 
     return StreamingResponse(
@@ -569,7 +537,7 @@ async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_req
             "Access-Control-Allow-Headers": "Content-Type"
         }
     )
-
+    
 @app.post("/chat")
 async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
     """Enhanced chat endpoint with improved reasoning and tool usage"""
@@ -601,7 +569,7 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
 
             # Use enhanced MCP streaming
             response_text = ""
-            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid):
+            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid, client_id):
                 if chunk.startswith("event: result"):
                     try:
                         data_line = chunk.split("\n")[1]

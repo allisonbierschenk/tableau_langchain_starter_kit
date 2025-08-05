@@ -1,3 +1,15 @@
+def build_agent_identity(ds_metadata):
+    ds_name = ds_metadata.get("name", "this Tableau datasource")
+    ds_description = ds_metadata.get("description", "")
+    return f"""
+You are **Agent {ds_name}**, a senior AI data analyst with deep expertise in the "{ds_name}" dataset.
+{f'Description: {ds_description}' if ds_description else ''}
+You understand the structure, fields, and business context of this dataset and can provide accurate, actionable insights.
+Always align your answers with the actual data available in "{ds_name}".
+When field names or metrics are unclear, help the user clarify by offering available options or asking follow-up questions.
+""".strip()
+
+
 def build_enhanced_agent_system_prompt(agent_identity, ds_name, detected_data_sources=None):
     detected_sources_str = (
         "\n".join([f"• {src}" for src in detected_data_sources])
@@ -165,3 +177,4 @@ User: "What insights can you provide?"
 
 Remember: You're not just answering questions - you're providing intelligent, data-driven analysis that helps users understand their business better.
 """.strip()
+
