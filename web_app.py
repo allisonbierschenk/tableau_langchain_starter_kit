@@ -43,6 +43,102 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 MAX_MCP_ITERATIONS = 10
 MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
 
+# Session-based client tracking
+import threading
+from collections import defaultdict
+
+DATASOURCE_LUID_STORE = {}
+DATASOURCE_METADATA_STORE = {}
+CLIENT_SESSION_STORE = defaultdict(dict)  # Track client sessions
+SESSION_LOCK = threading.Lock()
+
+# Field discovery and validation
+FIELD_CACHE = {}  # Cache discovered fields per datasource
+FIELD_MAPPING = {
+    'agent': ['Underwriter', 'Agent Name', 'Agent', 'Broker', 'Sales Rep'],
+    'premium': ['GWP', 'Gross Written Premium', 'Premium Amount', 'Premium'],
+    'policy': ['Policy ID', 'Policy Number', 'Policy Count', 'Policies'],
+    'customer': ['Customer', 'Client Name', 'Account', 'Client'],
+    'sales': ['Revenue', 'Sales', 'Amount', 'Value', 'Total'],
+    'performance': ['Performance', 'Metrics', 'KPIs', 'Score'],
+    'cost': ['Cost', 'Expense', 'Cost per Policy', 'CPP'],
+    'claims': ['Claims', 'Incurred Claims', 'Claims Amount'],
+    'region': ['Region', 'Area', 'Territory', 'State'],
+    'date': ['Date', 'Inception Date', 'Created Date', 'Effective Date']
+}
+
+def get_client_session_id(request: Request) -> str:
+    """Get a stable client session ID"""
+    client_id = request.client.host
+    
+    # Try to get existing session ID from headers or create new one
+    session_id = request.headers.get('X-Session-ID')
+    if not session_id:
+        # Create a session ID based on client IP and user agent
+        user_agent = request.headers.get('User-Agent', '')
+        session_id = f"{client_id}_{hash(user_agent) % 10000}"
+    
+    return session_id
+
+def store_client_datasource(session_id: str, datasource_luid: str, metadata: dict):
+    """Store datasource for a client session"""
+    with SESSION_LOCK:
+        CLIENT_SESSION_STORE[session_id]['datasource_luid'] = datasource_luid
+        CLIENT_SESSION_STORE[session_id]['metadata'] = metadata
+        # Also store in legacy format for backward compatibility
+        DATASOURCE_LUID_STORE[session_id] = datasource_luid
+        DATASOURCE_METADATA_STORE[session_id] = metadata
+        print(f"📊 Stored datasource for session {session_id}: {datasource_luid}")
+
+def get_client_datasource(session_id: str) -> tuple:
+    """Get datasource for a client session"""
+    with SESSION_LOCK:
+        luid = CLIENT_SESSION_STORE[session_id].get('datasource_luid')
+        metadata = CLIENT_SESSION_STORE[session_id].get('metadata', {})
+        return luid, metadata
+
+def get_field_alternatives(field_name: str) -> list:
+    """Get alternative field names for a given field"""
+    field_lower = field_name.lower()
+    alternatives = []
+    
+    for category, field_list in FIELD_MAPPING.items():
+        if category in field_lower or any(f.lower() in field_lower for f in field_list):
+            alternatives.extend(field_list)
+    
+    # Add common variations
+    if 'premium' in field_lower:
+        alternatives.extend(['GWP', 'Gross Written Premium', 'Premium Amount'])
+    if 'agent' in field_lower or 'broker' in field_lower:
+        alternatives.extend(['Underwriter', 'Agent Name', 'Broker'])
+    if 'policy' in field_lower:
+        alternatives.extend(['Policy ID', 'Policy Number', 'Policy Count'])
+    
+    return list(set(alternatives))  # Remove duplicates
+
+def validate_field_name(field_name: str, available_fields: list = None) -> tuple:
+    """Validate and suggest field names"""
+    if not available_fields:
+        return field_name, get_field_alternatives(field_name)
+    
+    # Check if field exists
+    if field_name in available_fields:
+        return field_name, []
+    
+    # Try to find similar fields
+    field_lower = field_name.lower()
+    similar_fields = []
+    
+    for available_field in available_fields:
+        if field_lower in available_field.lower() or available_field.lower() in field_lower:
+            similar_fields.append(available_field)
+    
+    # Get alternatives if no similar fields found
+    if not similar_fields:
+        similar_fields = get_field_alternatives(field_name)
+    
+    return None, similar_fields
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -55,9 +151,6 @@ class ChatResponse(BaseModel):
 
 class DataSourcesRequest(BaseModel):
     datasources: dict  # { "name": "federated_id" }
-
-DATASOURCE_LUID_STORE = {}
-DATASOURCE_METADATA_STORE = {}
 
 def get_user_regions(client_id):
     return ['West', 'South']
@@ -261,7 +354,9 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                     continue
 
             # Build enhanced system prompt
-            ds_metadata = DATASOURCE_METADATA_STORE.get(client_id) if client_id else None
+            ds_metadata = None
+            if client_id:  # client_id is now session_id
+                _, ds_metadata = get_client_datasource(client_id)
             
             if ds_metadata:
                 agent_identity = build_agent_identity(ds_metadata)
@@ -515,8 +610,8 @@ Format your response to be executive-ready with clear takeaways.'''
         
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
-    client_id = request.client.host
-    print(f"\n📥 /datasources request from client: {client_id}")
+    session_id = get_client_session_id(request)
+    print(f"\n📥 /datasources request from session: {session_id}")
     
     if not body.datasources:
         raise HTTPException(status_code=400, detail="No data sources provided")
@@ -528,16 +623,16 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     first_name, _ = next(iter(body.datasources.items()))
     print(f"\n🎯 Targeting first datasource: '{first_name}'")
 
-    user_regions = get_user_regions(client_id)
-    tableau_username = get_tableau_username(client_id)
+    user_regions = get_user_regions(session_id)
+    tableau_username = get_tableau_username(session_id)
     print(f"👤 Tableau username: {tableau_username}")
     print(f"🌍 User regions: {user_regions}")
 
     try:
         published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
 
-        DATASOURCE_LUID_STORE[client_id] = published_luid
-        DATASOURCE_METADATA_STORE[client_id] = {
+        # Store using new session tracking
+        metadata = {
             "name": first_name,
             "luid": published_luid,
             "projectName": full_metadata.get("projectName"),
@@ -545,40 +640,39 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
             "uri": full_metadata.get("contentUrl"),
             "owner": full_metadata.get("owner", {})
         }
-
-        print(f"✅ Stored published LUID for client {client_id}: {published_luid}")
-        print(f"📊 Total clients with datasources: {len(DATASOURCE_LUID_STORE)}")
-        print(f"📋 Available clients: {list(DATASOURCE_LUID_STORE.keys())}")
         
-        return {"status": "ok", "selected_luid": published_luid}
+        store_client_datasource(session_id, published_luid, metadata)
+
+        print(f"✅ Stored published LUID for session {session_id}: {published_luid}")
+        print(f"📊 Total sessions with datasources: {len(CLIENT_SESSION_STORE)}")
+        print(f"📋 Available sessions: {list(CLIENT_SESSION_STORE.keys())}")
+        
+        return {"status": "ok", "selected_luid": published_luid, "session_id": session_id}
         
     except Exception as e:
-        print(f"❌ Error initializing datasource for client {client_id}: {str(e)}")
+        print(f"❌ Error initializing datasource for session {session_id}: {str(e)}")
         # Try to use existing datasource as fallback
-        if DATASOURCE_LUID_STORE:
-            fallback_client = list(DATASOURCE_LUID_STORE.keys())[0]
-            fallback_luid = DATASOURCE_LUID_STORE[fallback_client]
-            print(f"🔄 Using fallback datasource from client {fallback_client}: {fallback_luid}")
-            DATASOURCE_LUID_STORE[client_id] = fallback_luid
-            if fallback_client in DATASOURCE_METADATA_STORE:
-                DATASOURCE_METADATA_STORE[client_id] = DATASOURCE_METADATA_STORE[fallback_client]
-            return {"status": "ok", "selected_luid": fallback_luid, "fallback": True}
+        if CLIENT_SESSION_STORE:
+            fallback_session = list(CLIENT_SESSION_STORE.keys())[0]
+            fallback_luid = CLIENT_SESSION_STORE[fallback_session].get('datasource_luid')
+            print(f"🔄 Using fallback datasource from session {fallback_session}: {fallback_luid}")
+            store_client_datasource(session_id, fallback_luid, CLIENT_SESSION_STORE[fallback_session].get('metadata', {}))
+            return {"status": "ok", "selected_luid": fallback_luid, "fallback": True, "session_id": session_id}
         else:
             raise HTTPException(status_code=500, detail=f"Failed to initialize datasource: {str(e)}")
 
 def setup_enhanced_agent(request: Request = None):
-    client_id = request.client.host if request else None
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-    ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
-    tableau_username = get_tableau_username(client_id)
-    user_regions = get_user_regions(client_id)
+    session_id = get_client_session_id(request) if request else None
+    datasource_luid, ds_metadata = get_client_datasource(session_id) if session_id else (None, {})
+    tableau_username = get_tableau_username(session_id) if session_id else None
+    user_regions = get_user_regions(session_id) if session_id else None
 
     if not datasource_luid:
         raise RuntimeError("❌ No Tableau datasource LUID available.")
     if not tableau_username or not user_regions:
         raise RuntimeError("❌ User context missing.")
 
-    print(f"\n🤖 Setting up ENHANCED agent for client {client_id}")
+    print(f"\n🤖 Setting up ENHANCED agent for session {session_id}")
     print(f"📊 Datasource LUID: {datasource_luid}")
     print(f"📘 Datasource Name: {ds_metadata.get('name')}")
 
@@ -644,36 +738,36 @@ def health_check():
 def debug_datasources():
     """Debug endpoint to check datasource status"""
     return {
-        "total_clients": len(DATASOURCE_LUID_STORE),
-        "clients": list(DATASOURCE_LUID_STORE.keys()),
+        "total_sessions": len(CLIENT_SESSION_STORE),
+        "sessions": list(CLIENT_SESSION_STORE.keys()),
         "datasources": {
-            client_id: {
-                "luid": luid,
-                "metadata": DATASOURCE_METADATA_STORE.get(client_id, {})
+            session_id: {
+                "luid": data.get('datasource_luid'),
+                "metadata": data.get('metadata', {})
             }
-            for client_id, luid in DATASOURCE_LUID_STORE.items()
+            for session_id, data in CLIENT_SESSION_STORE.items()
         }
     }
 
 @app.post("/debug/test-connection")
 async def test_connection(request: Request):
     """Test endpoint to verify datasource connection"""
-    client_id = request.client.host
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
+    session_id = get_client_session_id(request)
+    datasource_luid, _ = get_client_datasource(session_id)
     
     if not datasource_luid:
-        return {"status": "error", "message": "No datasource found for client"}
+        return {"status": "error", "message": "No datasource found for session"}
     
     try:
-        tableau_username = get_tableau_username(client_id)
-        user_regions = get_user_regions(client_id)
+        tableau_username = get_tableau_username(session_id)
+        user_regions = get_user_regions(session_id)
         
         # Test the connection
         token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
         
         return {
             "status": "success",
-            "client_id": client_id,
+            "session_id": session_id,
             "datasource_luid": datasource_luid,
             "tableau_username": tableau_username,
             "user_regions": user_regions,
@@ -683,18 +777,132 @@ async def test_connection(request: Request):
         return {
             "status": "error",
             "message": str(e),
-            "client_id": client_id,
+            "session_id": session_id,
+            "datasource_luid": datasource_luid
+        }
+
+@app.get("/debug/fields/{session_id}")
+async def get_available_fields(session_id: str):
+    """Get available fields for a datasource"""
+    datasource_luid, metadata = get_client_datasource(session_id)
+    
+    if not datasource_luid:
+        return {"status": "error", "message": "No datasource found for session"}
+    
+    try:
+        # Try to get fields from cache first
+        if datasource_luid in FIELD_CACHE:
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "datasource_luid": datasource_luid,
+                "fields": FIELD_CACHE[datasource_luid],
+                "cached": True
+            }
+        
+        # For now, return common insurance fields based on the datasource name
+        if metadata.get('name', '').lower() in ['joined', 'insurance', 'premium']:
+            common_fields = [
+                "Underwriter",
+                "Gross Written Premium", 
+                "GWP",
+                "Number of policies",
+                "Policy Count",
+                "Inception Date",
+                "Incurred claims",
+                "Cost per policy",
+                "Region",
+                "Area",
+                "Territory",
+                "Agent Name",
+                "Broker",
+                "Customer",
+                "Client Name",
+                "Policy ID",
+                "Policy Number",
+                "Premium Amount",
+                "Claims Amount",
+                "Revenue",
+                "Sales",
+                "Performance",
+                "Score"
+            ]
+            
+            FIELD_CACHE[datasource_luid] = common_fields
+            
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "datasource_luid": datasource_luid,
+                "fields": common_fields,
+                "cached": False
+            }
+        else:
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "datasource_luid": datasource_luid,
+                "fields": [],
+                "message": "No field mapping available for this datasource type"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "session_id": session_id,
+            "datasource_luid": datasource_luid
+        }
+
+@app.post("/debug/test-field")
+async def test_field(request: Request):
+    """Test a specific field to see if it works"""
+    session_id = get_client_session_id(request)
+    datasource_luid, metadata = get_client_datasource(session_id)
+    
+    if not datasource_luid:
+        return {"status": "error", "message": "No datasource found for session"}
+    
+    try:
+        # Get the field name from the request body
+        body = await request.json()
+        field_name = body.get('field_name', '')
+        
+        if not field_name:
+            return {"status": "error", "message": "No field name provided"}
+        
+        # Get available fields for suggestions
+        available_fields = FIELD_CACHE.get(datasource_luid, [])
+        
+        # Validate the field name
+        valid_field, alternatives = validate_field_name(field_name, available_fields)
+        
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "datasource_luid": datasource_luid,
+            "field_name": field_name,
+            "valid_field": valid_field,
+            "alternatives": alternatives,
+            "available_fields": available_fields[:10]  # First 10 fields for reference
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "session_id": session_id,
             "datasource_luid": datasource_luid
         }
 
 @app.post("/mcp-chat-stream")
 async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
     """Enhanced MCP streaming endpoint with better reasoning"""
-    client_id = fastapi_request.client.host
-    datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
+    session_id = get_client_session_id(fastapi_request)
+    datasource_luid, _ = get_client_datasource(session_id)
 
     async def generate():
-        async for chunk in mcp_chat_stream_enhanced(request.messages, request.query, datasource_luid, client_id):
+        async for chunk in mcp_chat_stream_enhanced(request.messages, request.query, datasource_luid, session_id):
             yield chunk
 
     return StreamingResponse(
@@ -711,32 +919,36 @@ async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_req
 @app.post("/chat")
 async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
     """Enhanced chat endpoint with improved reasoning and tool usage"""
-    client_id = fastapi_request.client.host
+    session_id = get_client_session_id(fastapi_request)
 
     # Enhanced client tracking with better debugging
-    print(f"\n💬 Enhanced chat request from client {client_id}")
+    print(f"\n💬 Enhanced chat request from session {session_id}")
     print(f"🧠 Message: {request.message}")
-    print(f"📊 Available datasources: {list(DATASOURCE_LUID_STORE.keys())}")
-    print(f"🔍 Client datasource: {DATASOURCE_LUID_STORE.get(client_id)}")
+    print(f"📊 Available sessions: {list(CLIENT_SESSION_STORE.keys())}")
+    
+    # Get datasource for this session
+    datasource_luid, ds_metadata = get_client_datasource(session_id)
+    print(f"🔍 Session datasource: {datasource_luid}")
 
     # Check if datasource is available
-    if client_id not in DATASOURCE_LUID_STORE:
-        print(f"❌ No datasource found for client {client_id}")
+    if not datasource_luid:
+        print(f"❌ No datasource found for session {session_id}")
         # Try to find any available datasource as fallback
-        if DATASOURCE_LUID_STORE:
-            fallback_client = list(DATASOURCE_LUID_STORE.keys())[0]
-            fallback_luid = DATASOURCE_LUID_STORE[fallback_client]
-            print(f"🔄 Using fallback datasource from client {fallback_client}: {fallback_luid}")
-            DATASOURCE_LUID_STORE[client_id] = fallback_luid
-            if fallback_client in DATASOURCE_METADATA_STORE:
-                DATASOURCE_METADATA_STORE[client_id] = DATASOURCE_METADATA_STORE[fallback_client]
+        if CLIENT_SESSION_STORE:
+            fallback_session = list(CLIENT_SESSION_STORE.keys())[0]
+            fallback_luid = CLIENT_SESSION_STORE[fallback_session].get('datasource_luid')
+            fallback_metadata = CLIENT_SESSION_STORE[fallback_session].get('metadata', {})
+            print(f"🔄 Using fallback datasource from session {fallback_session}: {fallback_luid}")
+            store_client_datasource(session_id, fallback_luid, fallback_metadata)
+            datasource_luid = fallback_luid
+            ds_metadata = fallback_metadata
         else:
             raise HTTPException(
                 status_code=400,
                 detail="Datasource not initialized yet. Please wait for datasource detection to complete."
             )
 
-    if not DATASOURCE_LUID_STORE.get(client_id):
+    if not datasource_luid:
         raise HTTPException(
             status_code=400,
             detail="Datasource not initialized yet. Please wait for datasource detection to complete."
@@ -758,11 +970,10 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
 
         if use_mcp:
             print("🚀 Using enhanced MCP server for intelligent analysis...")
-            datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
 
             # Use enhanced MCP streaming
             response_text = ""
-            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid, client_id):
+            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid, session_id):
                 if chunk.startswith("event: result"):
                     try:
                         data_line = chunk.split("\n")[1]

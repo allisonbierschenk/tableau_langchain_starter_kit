@@ -3,6 +3,15 @@
 let datasourceReady = false;
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
+let sessionId = null; // Track session ID for better client-server communication
+
+// Generate a session ID for this client
+function generateSessionId() {
+    if (!sessionId) {
+        sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+    return sessionId;
+}
 
 // --- Enhanced Message Display Helper ---
 function addMessage(html, type, messageId = null) {
@@ -180,7 +189,8 @@ async function handleMCPRequest(message, controller, botMessageId) {
         method: 'POST',
         headers: { 
             'Content-Type': 'application/json',
-            'Accept': 'text/event-stream'
+            'Accept': 'text/event-stream',
+            'X-Session-ID': generateSessionId()
         },
         body: JSON.stringify({
             messages: conversationHistory.slice(-10),
@@ -208,7 +218,8 @@ async function handleTraditionalRequest(message, controller) {
     const response = await fetch('/chat', {
         method: 'POST',
         headers: { 
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Session-ID': generateSessionId()
         },
         body: JSON.stringify({ message }),
         signal: controller.signal
@@ -525,7 +536,10 @@ async function listAndSendDashboardDataSources() {
         // Send to backend
         const resp = await fetch('/datasources', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Session-ID': generateSessionId()
+            },
             body: JSON.stringify({ datasources: dataSourceMap })
         });
         
