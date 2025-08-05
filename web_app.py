@@ -19,7 +19,7 @@ from langsmith import Client
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_tableau.tools.simple_datasource_qa import initialize_simple_datasource_qa
-from utilities.prompt import build_agent_identity, build_agent_system_prompt
+from utilities.prompt import build_agent_identity, build_enhanced_agent_system_prompt
 
 load_dotenv()
 
@@ -179,27 +179,29 @@ class MCPClient:
                 raise Exception(f"Tool execution failed: {response.status} - {error_text}")
             return await response.json()
 
-async def create_openai_completion(messages: List[Dict], tools: List[Dict] = None):
-    """Create OpenAI completion with tools"""
+async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Dict] = None):
+    """Enhanced OpenAI completion with better parameters for reasoning"""
     openai_api_key = os.environ.get('OPENAI_API_KEY')
     if not openai_api_key:
         raise Exception("OpenAI API key not found")
-    
+
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json'
     }
-    
+
     payload = {
-        'model': 'gpt-4o-mini',
+        'model': 'gpt-4o',  # Use most capable model
         'messages': messages,
-        'temperature': 0
+        'temperature': 0.1,  # Slight creativity while maintaining accuracy
+        'max_tokens': 4000,  # Allow longer responses
+        'top_p': 0.9,       # Focus on high-probability tokens
     }
-    
+
     if tools:
         payload['tools'] = tools
         payload['tool_choice'] = 'auto'
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.post(
             'https://api.openai.com/v1/chat/completions',
@@ -210,28 +212,28 @@ async def create_openai_completion(messages: List[Dict], tools: List[Dict] = Non
                 error_text = await response.text()
                 raise Exception(f"OpenAI API error: {response.status} - {error_text}")
             return await response.json()
-
-async def mcp_chat_stream(messages: List[Dict[str, str]], query: str, datasource_luid: str = None) -> AsyncGenerator[str, None]:
-    """Stream MCP chat responses with progress updates"""
+        
+async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, datasource_luid: str = None) -> AsyncGenerator[str, None]:
+    """Enhanced MCP chat with better reasoning and tool usage"""
     
     def send_event(event: str, data: dict):
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-    
+
     try:
-        yield send_event('progress', {'message': 'Initializing MCP connection...', 'step': 'init'})
-        
+        yield send_event('progress', {'message': 'Initializing enhanced MCP analysis...', 'step': 'init'})
+
         async with MCPClient(MCP_SERVER_URL) as mcp_client:
-            yield send_event('progress', {'message': 'Getting available tools...', 'step': 'tools'})
-            
+            yield send_event('progress', {'message': 'Loading advanced analytics tools...', 'step': 'tools'})
+
             # Get available tools from MCP server
             tools = await mcp_client.list_tools()
-            
+
             yield send_event('progress', {
-                'message': f'Found {len(tools)} tools: {", ".join([t.get("name", "unknown") for t in tools])}',
+                'message': f'Loaded {len(tools)} specialized tools for data analysis',
                 'step': 'tools-found'
             })
-            
-            # Prepare OpenAI tools format
+
+            # Enhanced OpenAI tools format
             openai_tools = []
             for tool in tools:
                 openai_tools.append({
@@ -242,182 +244,212 @@ async def mcp_chat_stream(messages: List[Dict[str, str]], query: str, datasource
                         'parameters': tool.get('inputSchema', {})
                     }
                 })
-            
-            # Create system message with MCP context and datasource info
-            system_content = f"""You are a helpful assistant that can analyze Tableau data using these available tools:
+
+            # ENHANCED SYSTEM MESSAGE - This is the key improvement
+            system_content = f"""You are an expert Tableau data analyst with access to powerful analysis tools. Your mission is to provide immediate, intelligent insights using real data.
+
+**CRITICAL SUCCESS PATTERNS:**
+
+1. **IMMEDIATE TOOL USAGE**: Never describe what you will do - just do it immediately
+2. **PROGRESSIVE INTELLIGENCE**: Build understanding step by step using tools
+3. **ERROR RECOVERY**: When tools fail, immediately try alternatives or explore available fields
+
+**AVAILABLE TOOLS:**
 {chr(10).join([f"- {tool.get('name')}: {tool.get('description')}" for tool in tools])}
 
-CRITICAL INSTRUCTIONS:
-1. When users ask questions about their data, IMMEDIATELY use the tools to get the actual data - don't just describe what you will do.
-2. ALWAYS use the datasource "eBikes Inventory and Sales" for data questions unless they specify a different datasource.
-3. For data analysis questions, follow this sequence:
-   - Use read-metadata or list-fields to understand the data structure
-   - Use query-datasource to get the actual data needed to answer the question
-   - Analyze the results and provide insights
-4. Don't say "I will do X" - just do X immediately using the available tools.
-5. Provide clear, actionable insights based on the actual data retrieved."""
+**MANDATORY EXECUTION RULES:**
+
+🔥 **FOR INSIGHT QUESTIONS** (containing: insights, analytics, trends, KPIs):
+1. IMMEDIATELY use `list-all-pulse-metric-definitions`
+2. IMMEDIATELY use `generate-pulse-metric-value-insight-bundle` for key metrics
+3. Present insights AND visualizations
+4. NO delays, NO explanations of what you'll do
+
+📊 **FOR DATA QUESTIONS** (totals, counts, breakdowns):
+1. IMMEDIATELY use `read-metadata` or `list-fields` if you need structure
+2. IMMEDIATELY use `query-datasource` with best-guess field names
+3. If query fails, IMMEDIATELY use `list-fields` and retry with correct names
+4. Present results in clear tables/summaries
+
+🚫 **FORBIDDEN BEHAVIORS:**
+- Saying "I will analyze..." - just analyze immediately
+- Asking permission to use tools - just use them
+- Generic responses without tool usage
+- Giving up after one failed query
+
+**INTELLIGENT FIELD MAPPING:**
+When users mention business terms, intelligently map to likely field names:
+- "agent" → try "Underwriter", "Agent Name", "Agent"
+- "premium" → try "GWP", "Gross Written Premium", "Premium"  
+- "policy" → try "Policy ID", "Number of policies", "Policy Count"
+
+**RESPONSE EXCELLENCE:**
+- Lead with actual data and numbers
+- Use tables and formatting for clarity
+- Always cite data source
+- Provide actionable insights
+- Suggest relevant follow-up questions
+
+**DATASOURCE CONTEXT:**
+- Default datasource: "eBikes Inventory and Sales" 
+- Current LUID: {datasource_luid or 'auto-detect'}
+- Always use actual field names from the data
+
+**EXAMPLE PERFECT INTERACTION:**
+User: "What are the total gross written premiums?"
+✅ PERFECT: [Immediately query for GWP total] → "According to the data, total gross written premiums are $794,904,732.13"
+❌ WRONG: "I'll help you find the total gross written premiums. Let me check..."
+
+Remember: You are not a helpful assistant who explains what you'll do. You are a data analyst who immediately delivers insights with actual data."""
 
             if datasource_luid:
-                system_content += f"\n6. The current datasource LUID is: {datasource_luid}"
+                system_content += f"\n\n**ACTIVE DATASOURCE LUID**: {datasource_luid}"
 
-            system_content += """
-
-PULSE METRICS AND KPI INSTRUCTIONS (HIGHEST PRIORITY):
-7. MANDATORY: When users mention ANY of these words/phrases, use Pulse tools FIRST before any other tools:
-   - "insights", "metric", "KPI", "key performance indicator", "pulse", "business performance", "dashboard"
-   - "bike sales", "bike returns", "sales insights", "returns insights" (these are known Pulse metrics)
-   - ANY question about insights from specific business metrics
-8. For ANY insight request, ALWAYS follow this sequence:
-   - FIRST: Use list-all-pulse-metric-definitions to see available metrics
-   - SECOND: For any specific metric mentioned, use generate-pulse-metric-value-insight-bundle with OUTPUT_FORMAT_HTML
-   - THIRD: Extract and display the actual Pulse insights AND Vega-Lite visualizations returned
-   - ONLY if Pulse tools fail completely, then use regular data analysis tools
-9. When displaying Pulse results, show the EXACT content returned by the tools, including HTML and Vega-Lite specs.
-10. DO NOT use query-datasource for insight requests - use Pulse tools instead."""
-            
-            # Prepare conversation
+            # Prepare conversation with enhanced context
             conversation_messages = [
                 {'role': 'system', 'content': system_content},
-                *messages,
+                *messages[-5:],  # Keep last 5 messages for context
                 {'role': 'user', 'content': query}
             ]
-            
-            # Iterative tool calling
+
+            # Enhanced iterative processing
             current_messages = conversation_messages.copy()
             all_tool_results = []
             final_response = ''
             iteration = 0
             
+            # Increase max iterations for complex analysis
+            MAX_ITERATIONS = 15
+
             yield send_event('progress', {
-                'message': 'Starting analysis...',
+                'message': 'Starting intelligent data analysis...',
                 'step': 'analysis-start',
-                'maxIterations': MAX_MCP_ITERATIONS
+                'maxIterations': MAX_ITERATIONS
             })
-            
-            while iteration < MAX_MCP_ITERATIONS:
+
+            while iteration < MAX_ITERATIONS:
                 iteration += 1
-                
+
                 yield send_event('progress', {
-                    'message': f'Iteration {iteration}/{MAX_MCP_ITERATIONS}: Analyzing and planning...',
+                    'message': f'Analysis step {iteration}: Processing and reasoning...',
                     'step': 'iteration-start',
                     'iteration': iteration
                 })
-                
-                # Call OpenAI with tools
-                completion = await create_openai_completion(current_messages, openai_tools)
-                
+
+                # Call OpenAI with enhanced parameters
+                completion = await create_openai_completion_enhanced(current_messages, openai_tools)
+
                 assistant_message = completion['choices'][0]['message']
                 current_messages.append(assistant_message)
-                
+
                 # If no tool calls, we're done
                 if not assistant_message.get('tool_calls'):
                     final_response = assistant_message.get('content', '')
                     yield send_event('progress', {
-                        'message': 'Analysis complete - generating final response...',
+                        'message': 'Analysis complete - delivering insights...',
                         'step': 'complete'
                     })
                     break
-                
+
                 tool_calls = assistant_message['tool_calls']
                 yield send_event('progress', {
-                    'message': f'Executing {len(tool_calls)} tool(s)...',
+                    'message': f'Executing {len(tool_calls)} analysis operations...',
                     'step': 'tools-executing',
                     'toolCount': len(tool_calls)
                 })
-                
-                # Execute all tool calls
+
+                # Execute all tool calls with enhanced error handling
                 for tool_call in tool_calls:
                     try:
                         tool_name = tool_call['function']['name']
                         tool_args = json.loads(tool_call['function']['arguments'])
-                        
+
                         yield send_event('progress', {
-                            'message': f'{tool_name}({", ".join([f"{k}: {json.dumps(v)}" for k, v in tool_args.items()])})',
+                            'message': f'Running {tool_name}...',
                             'step': 'tool-executing',
-                            'tool': tool_name,
-                            'arguments': tool_args
+                            'tool': tool_name
                         })
-                        
+
                         # Execute tool via MCP
                         result = await mcp_client.call_tool(tool_name, tool_args)
-                        
+
                         tool_result = {
                             'tool': tool_name,
                             'arguments': tool_args,
                             'result': result.get('content', [])
                         }
-                        
+
                         all_tool_results.append(tool_result)
-                        
+
                         yield send_event('progress', {
                             'message': f'{tool_name} completed successfully',
                             'step': 'tool-completed',
                             'tool': tool_name,
                             'success': True
                         })
-                        
+
                         # Add tool result to conversation
                         current_messages.append({
                             'role': 'tool',
                             'content': json.dumps(result.get('content', [])),
                             'tool_call_id': tool_call['id']
                         })
-                        
+
                     except Exception as tool_error:
                         error_result = {
                             'tool': tool_call['function']['name'],
                             'arguments': tool_call['function']['arguments'],
                             'error': str(tool_error)
                         }
-                        
+
                         all_tool_results.append(error_result)
-                        
+
                         yield send_event('progress', {
-                            'message': f'❌ {tool_call["function"]["name"]} failed: {str(tool_error)}',
+                            'message': f'⚠️ {tool_call["function"]["name"]} encountered an issue, trying alternatives...',
                             'step': 'tool-error',
-                            'tool': tool_call['function']['name'],
-                            'error': str(tool_error)
+                            'tool': tool_call['function']['name']
                         })
-                        
-                        # Add error to conversation
+
+                        # Add error to conversation with guidance for recovery
+                        error_guidance = f"Tool failed: {str(tool_error)}. Try using alternative field names or use list-fields to explore available options."
                         current_messages.append({
                             'role': 'tool',
-                            'content': json.dumps({'error': str(tool_error)}),
+                            'content': json.dumps({'error': str(tool_error), 'guidance': error_guidance}),
                             'tool_call_id': tool_call['id']
                         })
-                
+
+            # Final response generation with enhanced parameters
+            if iteration >= MAX_ITERATIONS and not final_response:
                 yield send_event('progress', {
-                    'message': f'Iteration {iteration} completed - {len(tool_calls)} tool(s) executed',
-                    'step': 'iteration-complete',
-                    'iteration': iteration,
-                    'toolsExecuted': len(tool_calls)
-                })
-            
-            # If we hit max iterations, make one final call
-            if iteration >= MAX_MCP_ITERATIONS and not final_response:
-                yield send_event('progress', {
-                    'message': 'Max iterations reached - generating final response...',
+                    'message': 'Finalizing comprehensive analysis...',
                     'step': 'max-iterations'
                 })
+
+                # Add instruction for final summary
+                current_messages.append({
+                    'role': 'system',
+                    'content': 'Provide a comprehensive summary of your analysis with the data you have gathered. Focus on actionable insights and specific numbers.'
+                })
                 
-                final_completion = await create_openai_completion(current_messages)
+                final_completion = await create_openai_completion_enhanced(current_messages)
                 final_response = final_completion['choices'][0]['message'].get('content', '')
-            
-            # Send final result
+
+            # Send enhanced final result
             yield send_event('result', {
                 'response': final_response,
                 'toolResults': all_tool_results,
-                'iterations': iteration
+                'iterations': iteration,
+                'analysisQuality': 'enhanced'
             })
-            
-            yield send_event('done', {'message': 'Stream complete'})
-            
+
+            yield send_event('done', {'message': 'Enhanced analysis complete'})
+
     except Exception as error:
         yield send_event('error', {
-            'error': 'Failed to process chat request',
+            'error': 'Enhanced analysis failed',
             'details': str(error)
         })
-
+        
 @app.post("/datasources")
 async def receive_datasources(request: Request, body: DataSourcesRequest):
     client_id = request.client.host
@@ -453,7 +485,7 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
     print(f"✅ Stored published LUID for client {client_id}: {published_luid}\n")
     return {"status": "ok", "selected_luid": published_luid}
 
-def setup_agent(request: Request = None):
+def setup_enhanced_agent(request: Request = None):
     client_id = request.client.host if request else None
     datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
     ds_metadata = DATASOURCE_METADATA_STORE.get(client_id)
@@ -465,16 +497,22 @@ def setup_agent(request: Request = None):
     if not tableau_username or not user_regions:
         raise RuntimeError("❌ User context missing.")
 
-    print(f"\n🤖 Setting up agent for client {client_id}")
+    print(f"\n🤖 Setting up ENHANCED agent for client {client_id}")
     print(f"📊 Datasource LUID: {datasource_luid}")
     print(f"📘 Datasource Name: {ds_metadata.get('name')}")
 
     if ds_metadata:
         agent_identity = build_agent_identity(ds_metadata)
-        agent_prompt = build_agent_system_prompt(agent_identity, ds_metadata.get("name", "this Tableau datasource"))
+        # Use the enhanced system prompt
+        agent_prompt = build_enhanced_agent_system_prompt(
+            agent_identity, 
+            ds_metadata.get("name", "this Tableau datasource")
+        )
     else:
-        from utilities.prompt import AGENT_SYSTEM_PROMPT
-        agent_prompt = AGENT_SYSTEM_PROMPT
+        agent_prompt = build_enhanced_agent_system_prompt(
+            "Senior AI Data Analyst", 
+            "this Tableau datasource"
+        )
 
     analyze_datasource = initialize_simple_datasource_qa(
         domain=os.environ['TABLEAU_DOMAIN_FULL'],
@@ -485,12 +523,14 @@ def setup_agent(request: Request = None):
         tableau_api_version=os.environ['TABLEAU_API_VERSION'],
         tableau_user=tableau_username,
         datasource_luid=datasource_luid,
-        tooling_llm_model="gpt-4.1-nano",
+        tooling_llm_model="gpt-4o-mini",  # Use more capable model
         model_provider="openai"
     )
 
-    llm = ChatOpenAI(model="gpt-4.1", temperature=0)
+    # Use more capable LLM for reasoning
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)  # Upgrade from gpt-4.1
     tools = [analyze_datasource]
+    
     return create_react_agent(
         model=llm,
         tools=tools,
@@ -509,17 +549,16 @@ def static_index():
 def health_check():
     return {"status": "ok"}
 
-# New MCP-powered chat endpoint with streaming
 @app.post("/mcp-chat-stream")
-async def mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
-    """Stream MCP chat responses with real-time progress updates"""
+async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
+    """Enhanced MCP streaming endpoint with better reasoning"""
     client_id = fastapi_request.client.host
     datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-    
+
     async def generate():
-        async for chunk in mcp_chat_stream(request.messages, request.query, datasource_luid):
+        async for chunk in mcp_chat_stream_enhanced(request.messages, request.query, datasource_luid):
             yield chunk
-    
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
@@ -531,59 +570,61 @@ async def mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Req
         }
     )
 
-# Enhanced chat endpoint that chooses between MCP and traditional approach
 @app.post("/chat")
-async def chat(request: ChatRequest, fastapi_request: Request):
-    """Enhanced chat endpoint that uses MCP when available, falls back to traditional agent"""
+async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
+    """Enhanced chat endpoint with improved reasoning and tool usage"""
     client_id = fastapi_request.client.host
-    
+
     if client_id not in DATASOURCE_LUID_STORE or not DATASOURCE_LUID_STORE[client_id]:
         raise HTTPException(
             status_code=400,
             detail="Datasource not initialized yet. Please wait for datasource detection to complete."
         )
-    
+
     try:
-        print(f"\n💬 Chat request from client {client_id}")
+        print(f"\n💬 Enhanced chat request from client {client_id}")
         print(f"🧠 Message: {request.message}")
+
+        # Enhanced keyword detection for MCP usage
+        mcp_keywords = [
+            'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
+            'analytics', 'performance', 'trend', 'trends', 'analysis', 'visualiz',
+            'chart', 'graph', 'business intelligence', 'bi', 'what can you tell me',
+            'show me', 'analyze', 'breakdown', 'summary', 'overview'
+        ]
         
-        # Check if we can use MCP (for insight/analytics queries)
-        use_mcp = any(keyword in request.message.lower() for keyword in [
-            'insight', 'metric', 'kpi', 'pulse', 'dashboard', 'analytics', 'performance',
-            'trend', 'analysis', 'visualiz'
-        ])
-        
+        use_mcp = any(keyword in request.message.lower() for keyword in mcp_keywords)
+
         if use_mcp:
-            print("🔄 Using MCP server for enhanced analytics...")
+            print("🚀 Using enhanced MCP server for intelligent analysis...")
             datasource_luid = DATASOURCE_LUID_STORE.get(client_id)
-            
-            # Use MCP for advanced analytics
+
+            # Use enhanced MCP streaming
             response_text = ""
-            async for chunk in mcp_chat_stream([], request.message, datasource_luid):
+            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid):
                 if chunk.startswith("event: result"):
                     try:
-                        data_line = chunk.split("\n")[1]  # Get the data line
+                        data_line = chunk.split("\n")[1]
                         if data_line.startswith("data: "):
-                            result_data = json.loads(data_line[6:])  # Remove "data: " prefix
+                            result_data = json.loads(data_line[6:])
                             response_text = result_data.get('response', '')
                             break
                     except (json.JSONDecodeError, IndexError):
                         continue
-            
+
             if not response_text:
-                # Fallback to traditional agent if MCP fails
-                print("⚠️ MCP failed, falling back to traditional agent...")
-                agent = setup_agent(fastapi_request)
+                print("⚠️ Enhanced MCP failed, using enhanced traditional agent...")
+                agent = setup_enhanced_agent(fastapi_request)
                 messages = {"messages": [("user", request.message)]}
                 for chunk in agent.stream(messages, config=config, stream_mode="values"):
                     if 'messages' in chunk and chunk['messages']:
                         latest_message = chunk['messages'][-1]
                         if hasattr(latest_message, 'content'):
                             response_text = latest_message.content
+
         else:
-            print("🔄 Using traditional agent for basic queries...")
-            # Use traditional agent for simple queries
-            agent = setup_agent(fastapi_request)
+            print("🔧 Using enhanced traditional agent for focused queries...")
+            agent = setup_enhanced_agent(fastapi_request)
             messages = {"messages": [("user", request.message)]}
             response_text = ""
             for chunk in agent.stream(messages, config=config, stream_mode="values"):
@@ -591,14 +632,14 @@ async def chat(request: ChatRequest, fastapi_request: Request):
                     latest_message = chunk['messages'][-1]
                     if hasattr(latest_message, 'content'):
                         response_text = latest_message.content
-        
-        print(f"🤖 Response: {response_text}")
+
+        print(f"🎯 Enhanced response: {response_text[:200]}...")
         return ChatResponse(response=response_text)
-        
+
     except Exception as e:
-        print("❌ Error in /chat endpoint:")
+        print("❌ Error in enhanced chat endpoint:")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Enhanced analysis error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
