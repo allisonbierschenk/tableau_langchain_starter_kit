@@ -1,4 +1,4 @@
-// script.js - ENHANCED VERSION WITH MCP STREAMING SUPPORT
+// script.js - ENHANCED VERSION WITH IMPROVED ERROR HANDLING AND MCP STREAMING
 
 let datasourceReady = false;
 let currentStream = null;
@@ -34,7 +34,7 @@ function showTypingIndicator(show = true) {
                 <div class="typing-dots">
                     <span></span><span></span><span></span>
                 </div>
-                <span class="typing-text">AI is thinking...</span>
+                <span class="typing-text">AI is analyzing your data...</span>
             </div>
         `;
         addMessage(indicatorHtml, 'bot', 'typing-indicator');
@@ -43,19 +43,36 @@ function showTypingIndicator(show = true) {
     }
 }
 
-// --- Detect if query should use MCP for advanced analytics ---
+// --- Improved MCP Detection ---
 function shouldUseMCP(message) {
     const mcpKeywords = [
         'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
         'analytics', 'performance', 'trend', 'trends', 'analysis', 'visualiz',
-        'chart', 'graph', 'plot', 'business intelligence', 'bi'
+        'chart', 'graph', 'plot', 'business intelligence', 'bi', 'top', 'best',
+        'worst', 'focus', 'proactive', 'recommend', 'should', 'opportunity',
+        'risk', 'pattern', 'anomaly', 'compare', 'comparison', 'overview',
+        'summary', 'key', 'important', 'critical', 'highlight'
     ];
     
     const lowerMessage = message.toLowerCase();
-    return mcpKeywords.some(keyword => lowerMessage.includes(keyword));
+    
+    // Also trigger MCP for questions that sound analytical
+    const analyticalPatterns = [
+        /what.*should.*focus/i,
+        /what.*insights?/i,
+        /tell me about/i,
+        /show me.*top/i,
+        /what.*important/i,
+        /what.*key/i,
+        /give me.*analysis/i,
+        /help me understand/i
+    ];
+    
+    return mcpKeywords.some(keyword => lowerMessage.includes(keyword)) ||
+           analyticalPatterns.some(pattern => pattern.test(message));
 }
 
-// --- Enhanced Streaming Chat with MCP Support ---
+// --- Enhanced Streaming Chat with Better Error Handling ---
 async function sendMessage() {
     // Validation checks
     if (!datasourceReady) {
@@ -87,74 +104,52 @@ async function sendMessage() {
     const sendBtn = document.getElementById('sendBtn');
     input.disabled = true;
     sendBtn.disabled = true;
-    sendBtn.innerHTML = '<span class="spinner"></span> Thinking...';
+    sendBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
 
     const botMessageId = 'bot-response-' + Date.now();
-    let botMessageDiv = showTypingIndicator();
     let fullResponse = '';
     let hasStartedResponse = false;
+    let usedMCP = false;
 
     try {
         const controller = new AbortController();
         currentStream = controller;
 
         // Determine which endpoint to use
-        const useMCP = shouldUseMCP(message);
-        const endpoint = useMCP ? '/mcp-chat-stream' : '/chat';
-        
-        console.log(`🔄 Using ${useMCP ? 'MCP streaming' : 'traditional'} endpoint for: "${message}"`);
+        usedMCP = shouldUseMCP(message);
+        console.log(`🔄 Using ${usedMCP ? 'MCP streaming' : 'traditional'} endpoint for: "${message}"`);
 
-        let response;
-        if (useMCP) {
-            // Use MCP streaming endpoint
-            response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify({
-                    messages: conversationHistory.slice(-10), // Keep last 10 messages for context
-                    query: message
-                }),
-                signal: controller.signal
-            });
-        } else {
-            // Use traditional endpoint
-            response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ message }),
-                signal: controller.signal
-            });
-        }
-
-        if (!response.ok) {
-            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        if (usedMCP) {
+            // Try MCP first
             try {
-                const errorData = await response.json();
-                errorMessage = errorData.detail || errorMessage;
-            } catch (e) {
-                // If we can't parse JSON, use the status text
+                showTypingIndicator();
+                fullResponse = await handleMCPRequest(message, controller, botMessageId);
+                hasStartedResponse = true;
+            } catch (mcpError) {
+                console.warn('MCP failed, falling back to traditional agent:', mcpError);
+                showTypingIndicator(false);
+                addMessage("🔄 <em>Switching to traditional analysis...</em>", "bot");
+                
+                // Fallback to traditional endpoint
+                fullResponse = await handleTraditionalRequest(message, controller);
+                hasStartedResponse = true;
             }
-            throw new Error(errorMessage);
+        } else {
+            // Use traditional endpoint directly
+            showTypingIndicator();
+            fullResponse = await handleTraditionalRequest(message, controller);
+            hasStartedResponse = true;
         }
 
-        if (useMCP && response.body) {
-            // Handle MCP streaming response
-            await handleMCPStreamingResponse(response, botMessageDiv, botMessageId);
-        } else {
-            // Handle traditional JSON response
-            const data = await response.json();
-            fullResponse = data.response || 'No response received';
-            
+        // Display final response if we have one
+        if (fullResponse && hasStartedResponse) {
             showTypingIndicator(false);
-            botMessageDiv = addMessage(formatResponse(fullResponse), 'bot', botMessageId);
-            
-            // Add assistant response to conversation history
+            addMessage(formatResponse(fullResponse), 'bot', botMessageId);
             conversationHistory.push({ role: 'assistant', content: fullResponse });
+        } else if (!hasStartedResponse) {
+            // If nothing worked, show error
+            showTypingIndicator(false);
+            addMessage("❌ I apologize, but I encountered an issue analyzing your request. Please try rephrasing your question or asking something more specific about your data.", 'bot', botMessageId);
         }
 
     } catch (error) {
@@ -168,7 +163,7 @@ async function sendMessage() {
             errorMessage = 'Unable to connect to the server. Please check your connection and try again.';
         }
         
-        addMessage(`❌ <strong>Error:</strong><br>${escapeHtml(errorMessage)}`, 'bot', botMessageId);
+        addMessage(`❌ <strong>Error:</strong><br>${escapeHtml(errorMessage)}<br><br>💡 <em>Try asking a more specific question about your data.</em>`, 'bot', botMessageId);
     } finally {
         // Reset UI state
         currentStream = null;
@@ -179,13 +174,67 @@ async function sendMessage() {
     }
 }
 
-// --- Handle MCP Streaming Response ---
-async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId) {
+// --- Handle MCP Request ---
+async function handleMCPRequest(message, controller, botMessageId) {
+    const response = await fetch('/mcp-chat-stream', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+        },
+        body: JSON.stringify({
+            messages: conversationHistory.slice(-10),
+            query: message
+        }),
+        signal: controller.signal
+    });
+
+    if (!response.ok) {
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+            const errorData = await response.json();
+            errorMessage = errorData.detail || errorMessage;
+        } catch (e) {
+            // If we can't parse JSON, use the status text
+        }
+        throw new Error(errorMessage);
+    }
+
+    return await handleMCPStreamingResponse(response, botMessageId);
+}
+
+// --- Handle Traditional Request ---
+async function handleTraditionalRequest(message, controller) {
+    const response = await fetch('/chat', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ message }),
+        signal: controller.signal
+    });
+
+    if (!response.ok) {
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+            const errorData = await response.json();
+            errorMessage = errorData.detail || errorMessage;
+        } catch (e) {
+            // If we can't parse JSON, use the status text
+        }
+        throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data.response || 'No response received';
+}
+
+// --- Enhanced MCP Streaming Response Handler ---
+async function handleMCPStreamingResponse(response, botMessageId) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let fullResponse = '';
-    let hasStartedResponse = false;
     let progressDiv = null;
 
     // Remove typing indicator when we start receiving real data
@@ -193,8 +242,9 @@ async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId)
     
     // Create progress indicator for MCP
     const progressId = 'mcp-progress-' + Date.now();
-    progressDiv = addMessage('<div class="mcp-progress">🔄 <em>Initializing MCP analysis...</em></div>', 'bot', progressId);
-    botMessageDiv = addMessage('', 'bot', botMessageId);
+    progressDiv = addMessage('<div class="mcp-progress">🔄 <em>Initializing advanced analysis...</em></div>', 'bot', progressId);
+    
+    let botMessageDiv = addMessage('', 'bot', botMessageId);
 
     try {
         while (true) {
@@ -219,33 +269,33 @@ async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId)
                         } else if (line.startsWith('data: ')) {
                             const dataStr = line.substring(6).trim();
                             if (dataStr) {
-                                eventData = JSON.parse(dataStr);
+                                try {
+                                    eventData = JSON.parse(dataStr);
+                                } catch (parseError) {
+                                    console.warn('Failed to parse event data:', dataStr, parseError);
+                                    continue;
+                                }
                             }
                         }
                     }
 
                     if (eventType && eventData) {
-                        await handleMCPStreamEvent(eventType, eventData, botMessageDiv, progressDiv, fullResponse);
-                        
-                        if (eventType === 'result') {
+                        if (eventType === 'progress' && progressDiv) {
+                            handleMCPProgressEvent(eventData, progressDiv);
+                        } else if (eventType === 'result') {
                             fullResponse = eventData.response || '';
-                            if (!hasStartedResponse) {
-                                hasStartedResponse = true;
-                                botMessageDiv.innerHTML = ''; // Clear any loading content
+                            if (fullResponse) {
+                                // Enhanced formatting for MCP results
+                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
                             }
-                            
-                            // Enhanced formatting for MCP results with visualization support
-                            botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
-                            
-                            // Add assistant response to conversation history
-                            conversationHistory.push({ role: 'assistant', content: fullResponse });
-                            
                             // Remove progress indicator
                             if (progressDiv) {
                                 progressDiv.remove();
                                 progressDiv = null;
                             }
                             break;
+                        } else if (eventType === 'error') {
+                            throw new Error(eventData.error || 'Unknown MCP stream error');
                         } else if (eventType === 'done') {
                             if (progressDiv) {
                                 progressDiv.remove();
@@ -261,9 +311,11 @@ async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId)
         }
 
         // Ensure we have some response
-        if (!hasStartedResponse && !botMessageDiv.innerHTML.trim()) {
-            botMessageDiv.innerHTML = "I completed processing your request, but didn't generate a visible response. Please try rephrasing your question.";
+        if (!fullResponse) {
+            throw new Error('No response received from MCP analysis');
         }
+
+        return fullResponse;
 
     } finally {
         if (progressDiv) {
@@ -272,26 +324,12 @@ async function handleMCPStreamingResponse(response, botMessageDiv, botMessageId)
     }
 }
 
-// --- Enhanced MCP Stream Event Handling ---
-async function handleMCPStreamEvent(eventType, eventData, messageDiv, progressDiv, currentResponse) {
-    switch (eventType) {
-        case 'progress':
-            if (eventData.message && progressDiv) {
-                const icon = getMCPProgressIcon(eventData.step);
-                const iteration = eventData.iteration ? ` (${eventData.iteration}/${eventData.maxIterations || 'N/A'})` : '';
-                progressDiv.innerHTML = `<div class="mcp-progress">${icon} <em>${escapeHtml(eventData.message)}${iteration}</em></div>`;
-            }
-            break;
-        case 'error':
-            throw new Error(eventData.error || 'Unknown MCP stream error');
-        case 'result':
-            // Handled in main loop
-            break;
-        case 'done':
-            // Stream complete
-            break;
-        default:
-            console.debug('Unknown MCP event type:', eventType, eventData);
+// --- Handle MCP Progress Events ---
+function handleMCPProgressEvent(eventData, progressDiv) {
+    if (eventData.message) {
+        const icon = getMCPProgressIcon(eventData.step);
+        const iteration = eventData.iteration ? ` (Step ${eventData.iteration}/${eventData.maxIterations || 'N/A'})` : '';
+        progressDiv.innerHTML = `<div class="mcp-progress">${icon} <em>${escapeHtml(eventData.message)}${iteration}</em></div>`;
     }
 }
 
@@ -306,7 +344,7 @@ function getMCPProgressIcon(step) {
         'tools-executing': '⚙️',
         'tool-executing': '🔧',
         'tool-completed': '✅',
-        'tool-error': '❌',
+        'tool-error': '⚠️',
         'iteration-complete': '✨',
         'complete': '🎉',
         'max-iterations': '⏰'
@@ -327,9 +365,20 @@ function formatMCPResponse(text) {
 
     // Enhanced formatting for data tables and insights
     formatted = formatDataTables(formatted);
-    formatted = formatVegaLiteSpecs(formatted);
+    formatted = formatInsightBoxes(formatted);
     
     return formatted;
+}
+
+// --- Format Insight Boxes ---
+function formatInsightBoxes(text) {
+    // Look for insight patterns and highlight them
+    text = text.replace(/💡\s*(.*?)(?=\n|$)/g, '<div class="insight-box">💡 <strong>$1</strong></div>');
+    text = text.replace(/🚨\s*(.*?)(?=\n|$)/g, '<div class="alert-box">🚨 <strong>$1</strong></div>');
+    text = text.replace(/📈\s*(.*?)(?=\n|$)/g, '<div class="trend-box">📈 <strong>$1</strong></div>');
+    text = text.replace(/🎯\s*(.*?)(?=\n|$)/g, '<div class="action-box">🎯 <strong>$1</strong></div>');
+    
+    return text;
 }
 
 // --- Format Data Tables in Response ---
@@ -390,77 +439,22 @@ function formatDataTables(text) {
     });
 }
 
-// --- Format Vega-Lite Specifications ---
-function formatVegaLiteSpecs(text) {
-    // Look for JSON code blocks that might contain Vega-Lite specs
-    const jsonBlockRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
-    
-    return text.replace(jsonBlockRegex, (match, jsonContent) => {
-        try {
-            const parsed = JSON.parse(jsonContent);
-            
-            // Check if this looks like a Vega-Lite spec
-            if (parsed.$schema && parsed.$schema.includes('vega-lite') || 
-                (parsed.data && parsed.mark && parsed.encoding)) {
-                
-                // Create a placeholder for the visualization
-                const vizId = 'vega-viz-' + Math.random().toString(36).substr(2, 9);
-                
-                // We can't render Vega-Lite directly in this context, but we can 
-                // format it nicely and provide download/copy functionality
-                return `
-                    <div class="vega-lite-container">
-                        <div class="vega-lite-header">
-                            📊 <strong>Interactive Visualization</strong>
-                            <button onclick="copyVegaSpec('${vizId}')" class="copy-btn">Copy Spec</button>
-                        </div>
-                        <div class="vega-lite-spec" id="${vizId}" style="display: none;">${jsonContent}</div>
-                        <div class="vega-lite-preview">
-                            <em>Vega-Lite visualization specification generated. You can copy the spec above to use in your preferred visualization tool.</em>
-                        </div>
-                    </div>
-                `;
-            }
-        } catch (e) {
-            // Not valid JSON or not a Vega-Lite spec, return as-is
-        }
-        
-        return match;
-    });
-}
-
-// --- Copy Vega-Lite Specification ---
-function copyVegaSpec(vizId) {
-    const specElement = document.getElementById(vizId);
-    if (specElement) {
-        const spec = specElement.textContent;
-        navigator.clipboard.writeText(spec).then(() => {
-            // Show temporary success message
-            const button = event.target;
-            const originalText = button.textContent;
-            button.textContent = 'Copied!';
-            button.style.backgroundColor = '#28a745';
-            setTimeout(() => {
-                button.textContent = originalText;
-                button.style.backgroundColor = '';
-            }, 2000);
-        }).catch(err => {
-            console.error('Failed to copy:', err);
-            alert('Failed to copy to clipboard. Please copy manually.');
-        });
-    }
-}
-
 // --- Standard Response Formatting Helper ---
 function formatResponse(text) {
     if (!text) return '';
     
-    return text
+    let formatted = text
         .replace(/\n/g, '<br>')
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // **bold**
         .replace(/\*(.*?)\*/g, '<em>$1</em>') // *italic*
         .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
         .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
+
+    // Add insight formatting for regular responses too
+    formatted = formatInsightBoxes(formatted);
+    formatted = formatDataTables(formatted);
+    
+    return formatted;
 }
 
 // --- HTML Escaping Helper ---
@@ -546,11 +540,11 @@ async function listAndSendDashboardDataSources() {
         // Re-enable inputs
         if (messageInput) {
             messageInput.disabled = false;
-            messageInput.placeholder = "Ask questions about your data...";
+            messageInput.placeholder = "Ask me about your data insights...";
         }
         if (sendBtn) sendBtn.disabled = false;
 
-        addMessage(`✅ <strong>Ready!</strong><br>You can now ask questions about your data. The primary data source <strong>${escapeHtml(namesArray[0])}</strong> is active.<br><br>💡 <em>Try asking: "What insights can you provide?" or "Show me analytics for this data"</em><br><br>🚀 <strong>Pro tip:</strong> Use words like "insights", "analytics", "trends", or "visualizations" to activate advanced MCP-powered analysis!`, "bot");
+        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"<br><br>🚀 <strong>Pro tip:</strong> I can analyze patterns, identify opportunities, and provide actionable recommendations!`, "bot");
 
     } catch (err) {
         console.error("Initialization error:", err);

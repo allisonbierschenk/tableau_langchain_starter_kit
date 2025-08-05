@@ -191,11 +191,11 @@ async def create_openai_completion_enhanced(messages: List[Dict], tools: List[Di
     }
 
     payload = {
-        'model': 'gpt-4o',  # Use most capable model
+        'model': 'gpt-4o', 
         'messages': messages,
-        'temperature': 0.1,  # Slight creativity while maintaining accuracy
-        'max_tokens': 4000,  # Allow longer responses
-        'top_p': 0.9,       # Focus on high-probability tokens
+        'temperature': 0.2,  # Balance creativity while maintaining accuracy
+        'max_tokens': 4096,  # Allow comprehensive responses
+        'top_p': 0.95,       # Allow some creativity
     }
 
     if tools:
