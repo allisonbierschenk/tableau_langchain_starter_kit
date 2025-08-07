@@ -7,31 +7,25 @@
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap" rel="stylesheet">
-    <!-- Load Tableau Extensions API first -->
-    <script src="static/tableau.extensions.1.latest.min.js"></script>
     <script src="static/script.js" defer></script>
 </head>
 <body>
-    <!-- Floating Chat Icon Button -->
-    <button id="chatIconBtn" class="chat-icon-btn" title="Open Chat">
-        💬
-    </button>
-
-    <!-- Chat Container (hidden by default) -->
-    <div id="chatContainer" class="chat-container-hidden">
+    <!-- Chat Container -->
+    <div id="chatContainer" class="chat-container-visible">
         <div class="container">
             <header>
-                <h1>Conversational Analytics</h1>
-                <button id="closeChatBtn" class="close-chat-btn" title="Close Chat">&times;</button>
+                <h1>Tableau AI Chat</h1>
+                <p class="subtitle">Ask me about your Tableau data sources</p>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    Hello! Ask me anything about your Tableau data.
+                    Hello! I can help you explore your Tableau data sources and provide insights.
                     <br><br>
-                    Try questions like:
-                    <br>• "Show me the top customers by sales"
-                    <br>• "What are the sales trends this quarter?"
+                    Try asking:
+                    <br>• "What data sources do I have access to?"
+                    <br>• "List my available data sources"
+                    <br>• "Show me all datasources"
                 </div>
             </div>
 

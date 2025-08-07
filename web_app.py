@@ -79,14 +79,6 @@ def get_client_session_id(request: Request) -> str:
         user_agent = request.headers.get('User-Agent', '')
         session_id = f"{client_id}_{hash(user_agent) % 10000}"
     
-    # If we have a session ID but no datasource, try to find any available datasource
-    if session_id and session_id not in CLIENT_SESSION_STORE:
-        # Try to find any available session with a datasource
-        for existing_session_id, data in CLIENT_SESSION_STORE.items():
-            if data.get('datasource_luid'):
-                print(f"🔄 Session {session_id} not found, using existing session {existing_session_id}")
-                return existing_session_id
-    
     print(f"🔍 Session ID resolution: client_id={client_id}, session_id={session_id}")
     return session_id
 
@@ -130,141 +122,6 @@ def cleanup_old_sessions():
         if expired_sessions:
             print(f"🧹 Cleaned up {len(expired_sessions)} expired sessions: {expired_sessions}")
 
-def get_field_alternatives(field_name: str) -> list:
-    """Get alternative field names for a given field"""
-    field_lower = field_name.lower()
-    alternatives = []
-    
-    for category, field_list in FIELD_MAPPING.items():
-        if category in field_lower or any(f.lower() in field_lower for f in field_list):
-            alternatives.extend(field_list)
-    
-    # Add common variations
-    if 'premium' in field_lower:
-        alternatives.extend(['GWP', 'Gross Written Premium', 'Premium Amount'])
-    if 'agent' in field_lower or 'broker' in field_lower:
-        alternatives.extend(['Underwriter', 'Agent Name', 'Broker'])
-    if 'policy' in field_lower:
-        alternatives.extend(['Policy ID', 'Policy Number', 'Policy Count'])
-    
-    return list(set(alternatives))  # Remove duplicates
-
-def validate_field_name(field_name: str, available_fields: list = None) -> tuple:
-    """Validate and suggest field names"""
-    if not available_fields:
-        return field_name, get_field_alternatives(field_name)
-    
-    # Check if field exists
-    if field_name in available_fields:
-        return field_name, []
-    
-    # Try to find similar fields
-    field_lower = field_name.lower()
-    similar_fields = []
-    
-    for available_field in available_fields:
-        if field_lower in available_field.lower() or available_field.lower() in field_lower:
-            similar_fields.append(available_field)
-    
-    # Get alternatives if no similar fields found
-    if not similar_fields:
-        similar_fields = get_field_alternatives(field_name)
-    
-    return None, similar_fields
-
-def generate_fallback_insights(datasource_name: str, error_context: str = "") -> str:
-    """Generate business insights even when field queries fail"""
-    
-    # Insurance-specific insights based on the datasource name
-    if "joined" in datasource_name.lower() or "insurance" in datasource_name.lower():
-        return f"""Based on your insurance data, here are the top 3 business insights you should focus on:
-
-## 🎯 **Top 3 Strategic Insights**
-
-### 1. **Performance Optimization Opportunities**
-- **Focus Area**: Agent/Broker performance analysis
-- **Key Metric**: Gross Written Premium (GWP) per agent
-- **Action**: Identify top performers and replicate their strategies
-- **Business Impact**: 20-30% potential revenue increase
-
-### 2. **Risk Management & Claims Analysis**
-- **Focus Area**: Claims patterns and cost management
-- **Key Metric**: Claims ratio and cost per policy
-- **Action**: Analyze claims trends to adjust pricing strategies
-- **Business Impact**: 15-25% cost reduction potential
-
-### 3. **Geographic & Market Expansion**
-- **Focus Area**: Regional performance and market penetration
-- **Key Metric**: Premium distribution by region/territory
-- **Action**: Identify underserved markets and expansion opportunities
-- **Business Impact**: 10-20% market share growth potential
-
-## 🚀 **Proactive Recommendations**
-
-**Immediate Actions:**
-1. **Review top 10% of agents** - Understand what makes them successful
-2. **Analyze claims patterns** - Look for seasonal trends and risk factors
-3. **Evaluate regional performance** - Identify growth opportunities
-
-**Strategic Focus:**
-- **Data Quality**: Ensure all premium and policy data is accurately captured
-- **Performance Tracking**: Implement regular agent performance reviews
-- **Market Analysis**: Monitor competitor activity in key regions
-
-{error_context if error_context else ""}
-
-💡 **Next Steps**: Ask me about specific metrics like "Show me top agents by GWP" or "What are the claims trends by region?" for more detailed analysis."""
-    
-    # Generic business insights for other datasources
-    else:
-        return f"""Based on your {datasource_name} data, here are the top 3 business insights you should focus on:
-
-## 🎯 **Top 3 Strategic Insights**
-
-### 1. **Performance Analysis**
-- **Focus Area**: Key performance indicators and metrics
-- **Action**: Identify top performers and best practices
-- **Business Impact**: 15-25% performance improvement potential
-
-### 2. **Trend Analysis**
-- **Focus Area**: Time-based patterns and seasonal trends
-- **Action**: Understand what drives success and plan accordingly
-- **Business Impact**: 10-20% strategic advantage
-
-### 3. **Opportunity Identification**
-- **Focus Area**: Growth areas and market opportunities
-- **Action**: Focus resources on high-potential areas
-- **Business Impact**: 20-30% growth potential
-
-## 🚀 **Proactive Recommendations**
-
-**Immediate Actions:**
-1. **Review top performers** - Understand success factors
-2. **Analyze trends** - Look for patterns and seasonality
-3. **Identify opportunities** - Focus on high-potential areas
-
-**Strategic Focus:**
-- **Data Quality**: Ensure accurate data capture and reporting
-- **Performance Tracking**: Implement regular performance reviews
-- **Market Analysis**: Monitor competitive landscape
-
-{error_context if error_context else ""}
-
-💡 **Next Steps**: Ask me about specific metrics or areas of interest for more detailed analysis."""
-
-class ChatRequest(BaseModel):
-    message: str
-
-class MCPChatRequest(BaseModel):
-    messages: List[Dict[str, str]]
-    query: str
-
-class ChatResponse(BaseModel):
-    response: str
-
-class DataSourcesRequest(BaseModel):
-    datasources: dict  # { "name": "federated_id" }
-
 def get_user_regions(client_id):
     return ['West', 'South']
 
@@ -291,7 +148,6 @@ def generate_jwt(tableau_username, user_regions):
     }
     jwt_token = jwt.encode(payload, secret_value, algorithm="HS256", headers=headers)
     print("\n🔐 JWT generated for Tableau API")
-    print(jwt_token)
     return jwt_token
 
 def tableau_signin_with_jwt(tableau_username, user_regions):
@@ -313,7 +169,6 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     print(f"\n🔑 Signing in to Tableau REST API at {url}")
     resp = requests.post(url, json=payload, headers=headers)
     print(f"🔁 Sign-in response code: {resp.status_code}")
-    print(f"📨 Sign-in response: {resp.text}")
     resp.raise_for_status()
     token = resp.json()['credentials']['token']
     site_id = resp.json()['credentials']['site']['id']
@@ -321,7 +176,8 @@ def tableau_signin_with_jwt(tableau_username, user_regions):
     print(f"✅ Site ID: {site_id}")
     return token, site_id
 
-def lookup_published_luid_by_name(name, tableau_username, user_regions):
+def get_all_datasources(tableau_username, user_regions):
+    """Get all available datasources from Tableau Server"""
     token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
     domain = os.environ['TABLEAU_DOMAIN_FULL']
     api_version = os.environ.get('TABLEAU_API_VERSION', '3.21')
@@ -330,24 +186,41 @@ def lookup_published_luid_by_name(name, tableau_username, user_regions):
         "X-Tableau-Auth": token,
         "Accept": "application/json"
     }
-    params = {
-        "filter": f"name:eq:{name}"
-    }
 
-    print(f"\n🔍 Looking up datasource by name using filter: '{name}'")
-    resp = requests.get(url, headers=headers, params=params)
-    print(f"🔁 Datasource fetch response code: {resp.status_code}")
-    print(f"📨 Response: {resp.text}")
+    print(f"\n🔍 Fetching all datasources from Tableau Server")
+    resp = requests.get(url, headers=headers)
+    print(f"🔁 Datasources fetch response code: {resp.status_code}")
     resp.raise_for_status()
 
     datasources = resp.json().get("datasources", {}).get("datasource", [])
-    if not datasources:
-        print(f"❌ No match found for datasource name: {name}")
-        raise HTTPException(status_code=404, detail=f"Datasource '{name}' not found on Tableau Server.")
+    print(f"✅ Found {len(datasources)} datasources")
+    
+    # Format the datasources for display
+    formatted_datasources = []
+    for ds in datasources:
+        formatted_datasources.append({
+            "name": ds.get('name', 'Unknown'),
+            "project": ds.get('project', {}).get('name', 'Unknown'),
+            "id": ds.get('id'),
+            "description": ds.get('description', ''),
+            "contentUrl": ds.get('contentUrl', ''),
+            "owner": ds.get('owner', {}).get('name', 'Unknown')
+        })
+    
+    return formatted_datasources
 
-    ds = datasources[0]
-    print(f"✅ Match found ➜ Name: {ds.get('name')} ➜ LUID: {ds.get('id')}")
-    return ds["id"], ds
+class ChatRequest(BaseModel):
+    message: str
+
+class MCPChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
+    query: str
+
+class ChatResponse(BaseModel):
+    response: str
+
+class DataSourcesRequest(BaseModel):
+    datasources: dict  # { "name": "federated_id" }
 
 # MCP Client functionality
 class MCPClient:
@@ -467,21 +340,10 @@ async def mcp_chat_stream_enhanced(messages: List[Dict[str, str]], query: str, d
                     continue
 
             # Build enhanced system prompt
-            ds_metadata = None
-            if client_id:  # client_id is now session_id
-                _, ds_metadata = get_client_datasource(client_id)
-            
-            if ds_metadata:
-                agent_identity = build_agent_identity(ds_metadata)
-                system_content = build_mcp_enhanced_system_prompt(
-                    agent_identity, 
-                    ds_metadata.get("name", "this Tableau datasource")
-                )
-            else:
-                system_content = build_mcp_enhanced_system_prompt(
-                    "Expert Business Intelligence Analyst", 
-                    "this Tableau datasource"
-                )
+            system_content = build_mcp_enhanced_system_prompt(
+                "Expert Business Intelligence Analyst", 
+                "this Tableau datasource"
+            )
             
             # Add active tools context
             available_tools = [f"- {tool.get('name')}: {tool.get('description')}" for tool in tools if tool.get('name')]
@@ -703,16 +565,6 @@ Format your response to be executive-ready with clear takeaways.'''
             if not final_response:
                 final_response = "I've completed a comprehensive analysis of your data. Based on the tools available and the data structure, I recommend focusing on key performance indicators and trend analysis to identify actionable insights for your business."
 
-            # Check if the response indicates field/formula errors and provide fallback insights
-            if any(error_indicator in final_response.lower() for error_indicator in [
-                'persistent issue', 'invalid formula', 'field names', 'query execution', 
-                'formula error', 'field verification', 'dataset configuration'
-            ]):
-                print("🔄 MCP field queries failed, providing fallback insights...")
-                datasource_name = ds_metadata.get('name', 'this dataset') if ds_metadata else 'this dataset'
-                error_context = "\n\n⚠️ **Note**: Some field queries encountered issues, but I'm providing strategic insights based on typical business patterns for this type of data."
-                final_response = generate_fallback_insights(datasource_name, error_context)
-
             # Enhanced final result
             yield send_event('result', {
                 'response': final_response,
@@ -730,125 +582,6 @@ Format your response to be executive-ready with clear takeaways.'''
             'details': str(error),
             'suggestion': 'Please try rephrasing your question or ask for specific data points.'
         })
-        
-@app.post("/datasources")
-async def receive_datasources(request: Request, body: DataSourcesRequest):
-    session_id = get_client_session_id(request)
-    print(f"\n📥 /datasources request from session: {session_id}")
-    print(f"📋 Current sessions before: {list(CLIENT_SESSION_STORE.keys())}")
-    
-    if not body.datasources:
-        raise HTTPException(status_code=400, detail="No data sources provided")
-
-    print("📦 Datasources received from Tableau Extensions API (name ➜ federated ID):")
-    for name, fed_id in body.datasources.items():
-        print(f"   - Name: '{name}' ➜ Federated ID: '{fed_id}'")
-
-    first_name, _ = next(iter(body.datasources.items()))
-    print(f"\n🎯 Targeting first datasource: '{first_name}'")
-
-    user_regions = get_user_regions(session_id)
-    tableau_username = get_tableau_username(session_id)
-    print(f"👤 Tableau username: {tableau_username}")
-    print(f"🌍 User regions: {user_regions}")
-
-    try:
-        published_luid, full_metadata = lookup_published_luid_by_name(first_name, tableau_username, user_regions)
-
-        # Store using new session tracking
-        metadata = {
-            "name": first_name,
-            "luid": published_luid,
-            "projectName": full_metadata.get("projectName"),
-            "description": full_metadata.get("description"),
-            "uri": full_metadata.get("contentUrl"),
-            "owner": full_metadata.get("owner", {})
-        }
-        
-        store_client_datasource(session_id, published_luid, metadata)
-
-        print(f"✅ Stored published LUID for session {session_id}: {published_luid}")
-        print(f"📊 Total sessions with datasources: {len(CLIENT_SESSION_STORE)}")
-        print(f"📋 Available sessions: {list(CLIENT_SESSION_STORE.keys())}")
-        print(f"📋 Session store contents after: {dict(CLIENT_SESSION_STORE)}")
-        
-        return {"status": "ok", "selected_luid": published_luid, "session_id": session_id}
-        
-    except Exception as e:
-        print(f"❌ Error initializing datasource for session {session_id}: {str(e)}")
-        # Try to use existing datasource as fallback
-        if CLIENT_SESSION_STORE:
-            fallback_session = list(CLIENT_SESSION_STORE.keys())[0]
-            fallback_luid = CLIENT_SESSION_STORE[fallback_session].get('datasource_luid')
-            print(f"🔄 Using fallback datasource from session {fallback_session}: {fallback_luid}")
-            if fallback_luid:
-                store_client_datasource(session_id, fallback_luid, CLIENT_SESSION_STORE[fallback_session].get('metadata', {}))
-                return {"status": "ok", "selected_luid": fallback_luid, "fallback": True, "session_id": session_id}
-            else:
-                print(f"⚠️ Fallback session {fallback_session} also has no datasource")
-        else:
-            raise HTTPException(status_code=500, detail=f"Failed to initialize datasource: {str(e)}")
-
-def setup_enhanced_agent(request: Request = None):
-    session_id = get_client_session_id(request) if request else None
-    datasource_luid, ds_metadata = get_client_datasource(session_id) if session_id else (None, {})
-    tableau_username = get_tableau_username(session_id) if session_id else None
-    user_regions = get_user_regions(session_id) if session_id else None
-
-    if not datasource_luid:
-        raise RuntimeError("❌ No Tableau datasource LUID available.")
-    if not tableau_username or not user_regions:
-        raise RuntimeError("❌ User context missing.")
-
-    print(f"\n🤖 Setting up ENHANCED agent for session {session_id}")
-    print(f"📊 Datasource LUID: {datasource_luid}")
-    print(f"📘 Datasource Name: {ds_metadata.get('name')}")
-
-    if ds_metadata:
-        agent_identity = build_agent_identity(ds_metadata)
-        # Use the enhanced system prompt
-        agent_prompt = build_enhanced_agent_system_prompt(
-            agent_identity, 
-            ds_metadata.get("name", "this Tableau datasource")
-        )
-    else:
-        agent_prompt = build_enhanced_agent_system_prompt(
-            "Senior AI Data Analyst", 
-            "this Tableau datasource"
-        )
-
-    try:
-        analyze_datasource = initialize_simple_datasource_qa(
-            domain=os.environ['TABLEAU_DOMAIN_FULL'],
-            site=os.environ['TABLEAU_SITE'],
-            jwt_client_id=os.environ['TABLEAU_JWT_CLIENT_ID'],
-            jwt_secret_id=os.environ['TABLEAU_JWT_SECRET_ID'],
-            jwt_secret=os.environ['TABLEAU_JWT_SECRET'],
-            tableau_api_version=os.environ['TABLEAU_API_VERSION'],
-            tableau_user=tableau_username,
-            datasource_luid=datasource_luid,
-            tooling_llm_model="gpt-4o-mini",  # Use more capable model
-            model_provider="openai"
-        )
-
-        # Use more capable LLM for reasoning
-        llm = ChatOpenAI(model="gpt-4o", temperature=0)  # Upgrade from gpt-4.1
-        tools = [analyze_datasource]
-        
-        return create_react_agent(
-            model=llm,
-            tools=tools,
-            prompt=agent_prompt
-        )
-    except Exception as e:
-        print(f"❌ Error setting up enhanced agent: {str(e)}")
-        # Return a basic agent with error handling
-        llm = ChatOpenAI(model="gpt-4o", temperature=0)
-        return create_react_agent(
-            model=llm,
-            tools=[],
-            prompt=agent_prompt
-        )
 
 @app.get("/")
 def home():
@@ -862,181 +595,27 @@ def static_index():
 def health_check():
     return {"status": "ok"}
 
-@app.get("/debug/datasources")
-def debug_datasources():
-    """Debug endpoint to check datasource status"""
-    # Clean up old sessions first
-    cleanup_old_sessions()
-    
-    return {
-        "total_sessions": len(CLIENT_SESSION_STORE),
-        "sessions": list(CLIENT_SESSION_STORE.keys()),
-        "datasources": {
-            session_id: {
-                "luid": data.get('datasource_luid'),
-                "metadata": data.get('metadata', {}),
-                "timestamp": data.get('timestamp', 0),
-                "age_seconds": time.time() - data.get('timestamp', 0) if data.get('timestamp') else None
-            }
-            for session_id, data in CLIENT_SESSION_STORE.items()
-        }
-    }
-
-@app.post("/debug/cleanup-sessions")
-async def cleanup_sessions():
-    """Manually cleanup old sessions"""
-    cleanup_old_sessions()
-    return {
-        "status": "success",
-        "message": "Session cleanup completed",
-        "remaining_sessions": len(CLIENT_SESSION_STORE)
-    }
-
-@app.post("/debug/test-connection")
-async def test_connection(request: Request):
-    """Test endpoint to verify datasource connection"""
-    session_id = get_client_session_id(request)
-    datasource_luid, _ = get_client_datasource(session_id)
-    
-    if not datasource_luid:
-        return {"status": "error", "message": "No datasource found for session"}
-    
+@app.get("/datasources")
+async def list_datasources():
+    """List all available datasources from Tableau Server"""
     try:
-        tableau_username = get_tableau_username(session_id)
-        user_regions = get_user_regions(session_id)
+        user_regions = get_user_regions("default")
+        tableau_username = get_tableau_username("default")
         
-        # Test the connection
-        token, site_id = tableau_signin_with_jwt(tableau_username, user_regions)
+        datasources = get_all_datasources(tableau_username, user_regions)
         
-        return {
-            "status": "success",
-            "session_id": session_id,
-            "datasource_luid": datasource_luid,
-            "tableau_username": tableau_username,
-            "user_regions": user_regions,
-            "connection": "active"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "session_id": session_id,
-            "datasource_luid": datasource_luid
-        }
-
-@app.get("/debug/fields/{session_id}")
-async def get_available_fields(session_id: str):
-    """Get available fields for a datasource"""
-    datasource_luid, metadata = get_client_datasource(session_id)
-    
-    if not datasource_luid:
-        return {"status": "error", "message": "No datasource found for session"}
-    
-    try:
-        # Try to get fields from cache first
-        if datasource_luid in FIELD_CACHE:
-            return {
-                "status": "success",
-                "session_id": session_id,
-                "datasource_luid": datasource_luid,
-                "fields": FIELD_CACHE[datasource_luid],
-                "cached": True
-            }
+        # Format the response for display
+        formatted_response = "Here are the data sources available:\n\n"
+        for ds in datasources:
+            formatted_response += f"Name: {ds['name']}\n"
+            formatted_response += f"Project: {ds['project']}\n"
+            formatted_response += f"ID: {ds['id']}\n\n"
         
-        # For now, return common insurance fields based on the datasource name
-        if metadata.get('name', '').lower() in ['joined', 'insurance', 'premium']:
-            common_fields = [
-                "Underwriter",
-                "Gross Written Premium", 
-                "GWP",
-                "Number of policies",
-                "Policy Count",
-                "Inception Date",
-                "Incurred claims",
-                "Cost per policy",
-                "Region",
-                "Area",
-                "Territory",
-                "Agent Name",
-                "Broker",
-                "Customer",
-                "Client Name",
-                "Policy ID",
-                "Policy Number",
-                "Premium Amount",
-                "Claims Amount",
-                "Revenue",
-                "Sales",
-                "Performance",
-                "Score"
-            ]
-            
-            FIELD_CACHE[datasource_luid] = common_fields
-            
-            return {
-                "status": "success",
-                "session_id": session_id,
-                "datasource_luid": datasource_luid,
-                "fields": common_fields,
-                "cached": False
-            }
-        else:
-            return {
-                "status": "success",
-                "session_id": session_id,
-                "datasource_luid": datasource_luid,
-                "fields": [],
-                "message": "No field mapping available for this datasource type"
-            }
-            
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "session_id": session_id,
-            "datasource_luid": datasource_luid
-        }
-
-@app.post("/debug/test-field")
-async def test_field(request: Request):
-    """Test a specific field to see if it works"""
-    session_id = get_client_session_id(request)
-    datasource_luid, metadata = get_client_datasource(session_id)
-    
-    if not datasource_luid:
-        return {"status": "error", "message": "No datasource found for session"}
-    
-    try:
-        # Get the field name from the request body
-        body = await request.json()
-        field_name = body.get('field_name', '')
-        
-        if not field_name:
-            return {"status": "error", "message": "No field name provided"}
-        
-        # Get available fields for suggestions
-        available_fields = FIELD_CACHE.get(datasource_luid, [])
-        
-        # Validate the field name
-        valid_field, alternatives = validate_field_name(field_name, available_fields)
-        
-        return {
-            "status": "success",
-            "session_id": session_id,
-            "datasource_luid": datasource_luid,
-            "field_name": field_name,
-            "valid_field": valid_field,
-            "alternatives": alternatives,
-            "available_fields": available_fields[:10]  # First 10 fields for reference
-        }
+        return {"response": formatted_response, "datasources": datasources}
         
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "session_id": session_id,
-            "datasource_luid": datasource_luid
-        }
+        print(f"❌ Error listing datasources: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list datasources: {str(e)}")
 
 @app.post("/mcp-chat-stream")
 async def enhanced_mcp_chat_stream_endpoint(request: MCPChatRequest, fastapi_request: Request):
@@ -1067,41 +646,16 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
     # Enhanced client tracking with better debugging
     print(f"\n💬 Enhanced chat request from session {session_id}")
     print(f"🧠 Message: {request.message}")
-    print(f"📊 Available sessions: {list(CLIENT_SESSION_STORE.keys())}")
-    print(f"📋 Session store contents: {dict(CLIENT_SESSION_STORE)}")
     
-    # Get datasource for this session
-    datasource_luid, ds_metadata = get_client_datasource(session_id)
-    print(f"🔍 Session datasource: {datasource_luid}")
+    # Check if the user is asking about datasources
+    if "data sources" in request.message.lower() or "datasources" in request.message.lower() or "what data sources" in request.message.lower():
+        try:
+            result = await list_datasources()
+            return ChatResponse(response=result["response"])
+        except Exception as e:
+            return ChatResponse(response=f"Sorry, I encountered an error while trying to list the data sources: {str(e)}")
 
-    # Check if datasource is available
-    if not datasource_luid:
-        print(f"❌ No datasource found for session {session_id}")
-        # Try to find any available datasource as fallback
-        if CLIENT_SESSION_STORE:
-            fallback_session = list(CLIENT_SESSION_STORE.keys())[0]
-            fallback_luid = CLIENT_SESSION_STORE[fallback_session].get('datasource_luid')
-            fallback_metadata = CLIENT_SESSION_STORE[fallback_session].get('metadata', {})
-            print(f"🔄 Using fallback datasource from session {fallback_session}: {fallback_luid}")
-            if fallback_luid:
-                store_client_datasource(session_id, fallback_luid, fallback_metadata)
-                datasource_luid = fallback_luid
-                ds_metadata = fallback_metadata
-            else:
-                print(f"⚠️ Fallback session {fallback_session} also has no datasource")
-        else:
-            print(f"❌ No sessions available for fallback")
-            raise HTTPException(
-                status_code=400,
-                detail="Datasource not initialized yet. Please wait for datasource detection to complete."
-            )
-
-    if not datasource_luid:
-        raise HTTPException(
-            status_code=400,
-            detail="Datasource not initialized yet. Please wait for datasource detection to complete."
-        )
-
+    # For other queries, use MCP or traditional agent
     try:
         # Enhanced keyword detection for MCP usage
         mcp_keywords = [
@@ -1121,7 +675,7 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
 
             # Use enhanced MCP streaming
             response_text = ""
-            async for chunk in mcp_chat_stream_enhanced([], request.message, datasource_luid, session_id):
+            async for chunk in mcp_chat_stream_enhanced([], request.message, None, session_id):
                 if chunk.startswith("event: result"):
                     try:
                         data_line = chunk.split("\n")[1]
@@ -1133,37 +687,12 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
                         continue
 
             if not response_text:
-                print("⚠️ Enhanced MCP failed, using enhanced traditional agent...")
-                agent = setup_enhanced_agent(fastapi_request)
-                messages = {"messages": [("user", request.message)]}
-                for chunk in agent.stream(messages, config=config, stream_mode="values"):
-                    if 'messages' in chunk and chunk['messages']:
-                        latest_message = chunk['messages'][-1]
-                        if hasattr(latest_message, 'content'):
-                            response_text = latest_message.content
+                response_text = "I apologize, but I'm unable to perform the requested analysis at the moment. Please try asking about available data sources or rephrase your question."
 
         else:
-            print("🔧 Using enhanced traditional agent for focused queries...")
-            agent = setup_enhanced_agent(fastapi_request)
-            messages = {"messages": [("user", request.message)]}
-            response_text = ""
-            for chunk in agent.stream(messages, config=config, stream_mode="values"):
-                if 'messages' in chunk and chunk['messages']:
-                    latest_message = chunk['messages'][-1]
-                    if hasattr(latest_message, 'content'):
-                        response_text = latest_message.content
+            response_text = "I can help you with data analysis and insights. Try asking me about available data sources or specific analysis questions."
 
         print(f"🎯 Enhanced response: {response_text[:200]}...")
-        
-        # If the response indicates field/formula errors, provide fallback insights
-        if not response_text or any(error_indicator in response_text.lower() for error_indicator in [
-            'persistent issue', 'invalid formula', 'field names', 'query execution', 
-            'formula error', 'field verification', 'dataset configuration'
-        ]):
-            print("🔄 Field queries failed, providing fallback insights...")
-            datasource_name = ds_metadata.get('name', 'this dataset') if ds_metadata else 'this dataset'
-            error_context = "\n\n⚠️ **Note**: Some field queries encountered issues, but I'm providing strategic insights based on typical business patterns for this type of data."
-            response_text = generate_fallback_insights(datasource_name, error_context)
         
         return ChatResponse(response=response_text)
 
@@ -1176,5 +705,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-    
     

@@ -1,4 +1,4 @@
-/* Enhanced CSS with MCP streaming support */
+/* Enhanced CSS for Standalone Tableau AI Chat */
 
 * {
     margin: 0;
@@ -8,43 +8,12 @@
 
 body {
     font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: hsl(0, 0%, 100%);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     height: 100vh;
     overflow: hidden;
 }
 
-/* Floating Chat Icon */
-.chat-icon-btn {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background: #6c757d;
-    border: none;
-    color: white;
-    font-size: 24px;
-    cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-    transition: all 0.3s ease;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chat-icon-btn:hover {
-    transform: scale(1.1);
-    box-shadow: 0 6px 25px rgba(0,0,0,0.2);
-    background: #5a6268;
-}
-
 /* Chat Container States */
-.chat-container-hidden {
-    display: none;
-}
-
 .chat-container-visible {
     display: block;
     position: fixed;
@@ -61,9 +30,9 @@ body {
     border-radius: 20px;
     width: 100%;
     height: 100%;
-    max-width: 450px;
-    max-height: 650px;
-    margin: 0 auto;
+    max-width: 800px;
+    max-height: 90vh;
+    margin: 5vh auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
     display: flex;
     flex-direction: column;
@@ -74,7 +43,7 @@ body {
 
 /* Header */
 header {
-    background: #6c757d;
+    background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
     color: white;
     padding: 20px;
     text-align: center;
@@ -82,36 +51,15 @@ header {
 }
 
 header h1 {
-    font-size: 24px;
+    font-size: 28px;
     font-weight: 700;
     margin-bottom: 5px;
 }
 
-header p {
-    font-size: 14px;
+.subtitle {
+    font-size: 16px;
     opacity: 0.9;
-}
-
-.close-chat-btn {
-    position: absolute;
-    top: 15px;
-    right: 15px;
-    background: rgba(255, 255, 255, 0.2);
-    border: none;
-    color: white;
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.3s ease;
-}
-
-.close-chat-btn:hover {
-    background: rgba(255, 255, 255, 0.3);
+    margin-top: 5px;
 }
 
 /* Chat Box */
@@ -236,46 +184,41 @@ header p {
     50% { opacity: 0.7; }
 }
 
-/* Vega-Lite Visualization Container */
-.vega-lite-container {
-    margin: 15px 0;
-    border: 2px solid #6c757d;
-    border-radius: 12px;
-    overflow: hidden;
-    background: #f8f9fa;
+/* Insight Boxes */
+.insight-box {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    color: #155724;
 }
 
-.vega-lite-header {
-    background: #6c757d;
-    color: white;
-    padding: 12px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-weight: 600;
+.alert-box {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    color: #721c24;
 }
 
-.copy-btn {
-    background: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    color: white;
-    padding: 4px 12px;
-    border-radius: 15px;
-    cursor: pointer;
-    font-size: 12px;
-    transition: all 0.3s ease;
+.trend-box {
+    background: #d1ecf1;
+    border: 1px solid #bee5eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    color: #0c5460;
 }
 
-.copy-btn:hover {
-    background: rgba(255, 255, 255, 0.3);
-    transform: scale(1.05);
-}
-
-.vega-lite-preview {
-    padding: 16px;
-    color: #6c757d;
-    font-style: italic;
-    text-align: center;
+.action-box {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    color: #856404;
 }
 
 /* Typing Indicator */
@@ -433,7 +376,7 @@ a:hover {
 }
 
 /* Enhanced Responsive Design */
-@media (max-width: 480px) {
+@media (max-width: 768px) {
     .container {
         width: 100%;
         height: 100%;
@@ -443,20 +386,16 @@ a:hover {
         margin: 0;
     }
     
-    .chat-icon-btn {
-        bottom: 15px;
-        right: 15px;
-        width: 50px;
-        height: 50px;
-        font-size: 20px;
-    }
-    
     header {
         padding: 15px;
     }
     
     header h1 {
-        font-size: 20px;
+        font-size: 24px;
+    }
+    
+    .subtitle {
+        font-size: 14px;
     }
     
     .chat-box {
@@ -561,8 +500,6 @@ input:focus {
 
 /* Print Styles */
 @media print {
-    .chat-icon-btn,
-    .close-chat-btn,
     .input-area {
         display: none !important;
     }

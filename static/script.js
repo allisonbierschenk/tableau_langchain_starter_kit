@@ -1,6 +1,5 @@
-// script.js - ENHANCED VERSION WITH IMPROVED ERROR HANDLING AND MCP STREAMING
+// script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
-let datasourceReady = false;
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
 let sessionId = null; // Track session ID for better client-server communication
@@ -83,12 +82,6 @@ function shouldUseMCP(message) {
 
 // --- Enhanced Streaming Chat with Better Error Handling ---
 async function sendMessage() {
-    // Validation checks
-    if (!datasourceReady) {
-        addMessage("⚠️ Please wait for the datasource to be initialized before asking questions.", "bot");
-        return;
-    }
-
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
     if (!message) {
@@ -489,106 +482,6 @@ function handleEnter(event) {
     }
 }
 
-// --- Enhanced Tableau Data Source Management ---
-async function listAndSendDashboardDataSources() {
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-    
-    // Disable inputs during initialization
-    if (messageInput) messageInput.disabled = true;
-    if (sendBtn) sendBtn.disabled = true;
-    datasourceReady = false;
-
-    try {
-        addMessage("🔄 <em>Initializing Tableau Extensions API...</em>", "bot");
-        
-        await tableau.extensions.initializeAsync();
-        const dashboard = tableau.extensions.dashboardContent.dashboard;
-        const worksheets = dashboard.worksheets;
-        const dataSourceMap = {};
-
-        addMessage("📊 <em>Scanning dashboard for data sources...</em>", "bot");
-
-        // Collect all unique data sources
-        for (const worksheet of worksheets) {
-            try {
-                const dataSources = await worksheet.getDataSourcesAsync();
-                dataSources.forEach(ds => {
-                    if (!Object.values(dataSourceMap).includes(ds.id)) {
-                        dataSourceMap[ds.name] = ds.id;
-                    }
-                });
-            } catch (wsError) {
-                console.warn(`Failed to get data sources from worksheet ${worksheet.name}:`, wsError);
-            }
-        }
-        
-        const namesArray = Object.keys(dataSourceMap);
-        if (namesArray.length === 0) {
-            addMessage("⚠️ <strong>No data sources detected</strong><br>Please ensure this dashboard contains worksheets with connected data sources.", "bot");
-            return;
-        }
-
-        // Display found data sources
-        const dataSourceList = namesArray.map(name => `• <strong>${escapeHtml(name)}</strong>`).join('<br>');
-        addMessage(`🔍 <strong>Found ${namesArray.length} data source(s):</strong><br>${dataSourceList}<br><br>⏳ <em>Initializing connection...</em>`, "bot");
-
-        // Send to backend
-        const resp = await fetch('/datasources', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-Session-ID': generateSessionId()
-            },
-            body: JSON.stringify({ datasources: dataSourceMap })
-        });
-        
-        if (!resp.ok) {
-            const errorData = await resp.json().catch(() => ({ detail: 'Unknown server error' }));
-            throw new Error(errorData.detail || `Server error: ${resp.status} ${resp.statusText}`);
-        }
-
-        const respData = await resp.json();
-        datasourceReady = true;
-        
-        // Re-enable inputs
-        if (messageInput) {
-            messageInput.disabled = false;
-            messageInput.placeholder = "Ask me about your data insights...";
-        }
-        if (sendBtn) sendBtn.disabled = false;
-
-        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"<br><br>🚀 <strong>Pro tip:</strong> I can analyze patterns, identify opportunities, and provide actionable recommendations!`, "bot");
-
-    } catch (err) {
-        console.error("Initialization error:", err);
-        
-        let errorMessage = err.message;
-        let suggestions = '';
-        
-        if (errorMessage.includes('Extensions API')) {
-            suggestions = '<br><br>📋 <strong>Troubleshooting:</strong><br>• Ensure you\'re running this in a Tableau dashboard<br>• Check that the extension is properly configured<br>• Verify the manifest file is accessible';
-        } else if (errorMessage.includes('server') || errorMessage.includes('fetch')) {
-            suggestions = '<br><br>📋 <strong>Troubleshooting:</strong><br>• Check that the Python server is running<br>• Verify network connectivity<br>• Check server logs for errors';
-        }
-        
-        addMessage(`❌ <strong>Initialization Failed</strong><br>${escapeHtml(errorMessage)}${suggestions}`, "bot");
-    }
-}
-
-// --- Enhanced UI Resize Helpers ---
-function resizeForChatOpen() {
-    if (window.tableau?.extensions?.ui?.setSizeAsync) {
-        tableau.extensions.ui.setSizeAsync({ width: 450, height: 650 }).catch(console.warn);
-    }
-}
-
-function resizeForChatClosed() {
-    if (window.tableau?.extensions?.ui?.setSizeAsync) {
-        tableau.extensions.ui.setSizeAsync({ width: 80, height: 80 }).catch(console.warn);
-    }
-}
-
 // --- Enhanced Keyboard Shortcuts ---
 function setupKeyboardShortcuts() {
     document.addEventListener('keydown', function(event) {
@@ -623,18 +516,8 @@ async function checkServerHealth() {
 
 // --- Enhanced DOMContentLoaded Event Listener ---
 document.addEventListener('DOMContentLoaded', async function() {
-    const chatIconBtn = document.getElementById('chatIconBtn');
-    const chatContainer = document.getElementById('chatContainer');
-    const closeChatBtn = document.getElementById('closeChatBtn');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
-
-    // Initial UI state
-    if (messageInput) {
-        messageInput.disabled = true;
-        messageInput.placeholder = "Initializing...";
-    }
-    if (sendBtn) sendBtn.disabled = true;
 
     // Setup event listeners
     if (messageInput) messageInput.addEventListener('keypress', handleEnter);
@@ -642,53 +525,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     setupKeyboardShortcuts();
 
-    // Chat UI management
-    if (chatIconBtn && chatContainer && closeChatBtn) {
-        // Initialize Tableau Extensions API
-        try {
-            await tableau.extensions.initializeAsync();
-        } catch (e) {
-            console.warn('Tableau Extensions API not available:', e);
-        }
-        
-        resizeForChatClosed();
-
-        chatIconBtn.addEventListener('click', function() {
-            chatContainer.classList.remove('chat-container-hidden');
-            chatContainer.classList.add('chat-container-visible');
-            chatIconBtn.style.display = 'none';
-            resizeForChatOpen();
-            setTimeout(() => { 
-                if (messageInput && !messageInput.disabled) messageInput.focus(); 
-            }, 100);
-        });
-
-        closeChatBtn.addEventListener('click', function() {
-            chatContainer.classList.remove('chat-container-visible');
-            chatContainer.classList.add('chat-container-hidden');
-            chatIconBtn.style.display = 'flex';
-            resizeForChatClosed();
-            
-            // Cancel any ongoing streams
-            if (currentStream) {
-                currentStream.abort();
-                currentStream = null;
-            }
-        });
-    }
-
-    // Auto-focus if chat is already open
-    if (messageInput && !chatContainer?.classList.contains('chat-container-hidden')) {
+    // Auto-focus on input
+    if (messageInput) {
         setTimeout(() => messageInput.focus(), 100);
     }
 
-    // Check server health before initializing
+    // Check server health
     const serverHealthy = await checkServerHealth();
     if (!serverHealthy) {
         addMessage("⚠️ <strong>Server Connection Issue</strong><br>Unable to connect to the backend server. Please ensure the Python server is running and accessible.", "bot");
         return;
     }
 
-    // Initialize data sources
-    await listAndSendDashboardDataSources();
+    // Show ready message
+    addMessage("✅ <strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
 });
