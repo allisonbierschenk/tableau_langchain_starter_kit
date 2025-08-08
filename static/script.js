@@ -1,5 +1,8 @@
 // script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
+// Configuration - Set your deployed backend URL here
+const API_BASE_URL = window.API_BASE_URL || 'https://your-heroku-app.herokuapp.com';
+
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
 let sessionId = null; // Track session ID for better client-server communication
@@ -178,7 +181,7 @@ async function sendMessage() {
 
 // --- Handle MCP Request ---
 async function handleMCPRequest(message, controller, botMessageId) {
-    const response = await fetch('/mcp-chat-stream', {
+    const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
         method: 'POST',
         headers: { 
             'Content-Type': 'application/json',
@@ -208,7 +211,7 @@ async function handleMCPRequest(message, controller, botMessageId) {
 
 // --- Handle Traditional Request ---
 async function handleTraditionalRequest(message, controller) {
-    const response = await fetch('/chat', {
+    const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 
             'Content-Type': 'application/json',
@@ -503,7 +506,7 @@ function setupKeyboardShortcuts() {
 // --- Enhanced Connection Health Check ---
 async function checkServerHealth() {
     try {
-        const response = await fetch('/health', { 
+        const response = await fetch(`${API_BASE_URL}/health`, { 
             method: 'GET',
             timeout: 5000 
         });

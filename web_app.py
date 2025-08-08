@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
@@ -15,6 +16,15 @@ import uvicorn
 load_dotenv()
 
 app = FastAPI()
+
+# Add CORS middleware for Tableau extension support
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your Tableau domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -297,6 +307,11 @@ async def read_root():
     """Serve the main HTML page"""
     with open("static/index.html", "r") as f:
         return HTMLResponse(content=f.read())
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "message": "Tableau AI Chat backend is running"}
 
 
 
