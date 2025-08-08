@@ -1,7 +1,7 @@
 // script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
 // Configuration - Set your deployed backend URL here
-const API_BASE_URL = window.API_BASE_URL || 'https://your-heroku-app.herokuapp.com';
+const API_BASE_URL = window.API_BASE_URL || 'https://tableau-langchain-starter-kit.vercel.app';
 
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
