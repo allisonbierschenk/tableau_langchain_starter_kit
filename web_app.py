@@ -26,42 +26,18 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
 
-# Global session storage (in production, use Redis or database)
-client_sessions = {}
-
 def get_client_session_id(request: Request) -> str:
-    """Get or create client session ID"""
-    client_ip = request.client.host
-    if client_ip not in client_sessions:
-        client_sessions[client_ip] = {
-            'datasource_luid': None,
-            'metadata': None
-        }
-    return client_ip
+    """Get client session ID for logging"""
+    return request.client.host
 
-def store_client_datasource(session_id: str, datasource_luid: str, metadata: dict):
-    """Store datasource info for client session"""
-    if session_id in client_sessions:
-        client_sessions[session_id]['datasource_luid'] = datasource_luid
-        client_sessions[session_id]['metadata'] = metadata
-
-def get_client_datasource(session_id: str) -> tuple:
-    """Get stored datasource info for client session"""
-    if session_id in client_sessions:
-        session = client_sessions[session_id]
-        return session.get('datasource_luid'), session.get('metadata')
-    return None, None
-
-# Tableau API configuration
-TABLEAU_SERVER_URL = os.getenv('TABLEAU_SERVER_URL')
-TABLEAU_SITE_ID = os.getenv('TABLEAU_SITE_ID')
-TABLEAU_PERSONAL_ACCESS_TOKEN_NAME = os.getenv('TABLEAU_PERSONAL_ACCESS_TOKEN_NAME')
-TABLEAU_PERSONAL_ACCESS_TOKEN_SECRET = os.getenv('TABLEAU_PERSONAL_ACCESS_TOKEN_SECRET')
+# Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 # MCP Configuration
 MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
 MAX_MCP_ITERATIONS = 10
+
+
 
 class MCPClient:
     def __init__(self, server_url: str):
@@ -145,7 +121,7 @@ async def create_openai_client():
     import openai
     return openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-async def mcp_chat_iterative(messages: List[Dict], query: str, datasource_luid: str = None):
+async def mcp_chat_iterative(messages: List[Dict], query: str):
     """
     Iterative MCP chat implementation matching the TypeScript pattern
     """
@@ -314,76 +290,7 @@ CRITICAL INSTRUCTIONS:
         traceback.print_exc()
         raise Exception(f"Failed to process chat request: {str(error)}")
 
-async def list_datasources():
-    """List all available datasources"""
-    try:
-        # Create JWT token for Tableau authentication
-        import jwt
-        import time
-        
-        payload = {
-            'iss': TABLEAU_PERSONAL_ACCESS_TOKEN_NAME,
-            'exp': int(time.time()) + 3600,  # 1 hour expiration
-            'aud': 'tableau',
-            'sub': TABLEAU_PERSONAL_ACCESS_TOKEN_NAME,
-            'scp': ['tableau:content:read', 'tableau:datasources:read']
-        }
-        
-        token = jwt.encode(payload, TABLEAU_PERSONAL_ACCESS_TOKEN_SECRET, algorithm='HS256')
-        
-        # Get datasources from Tableau
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'X-Tableau-Auth': token,
-                'Content-Type': 'application/json'
-            }
-            
-            url = f"{TABLEAU_SERVER_URL}/api/3.20/sites/{TABLEAU_SITE_ID}/datasources"
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to get datasources: {response.status}")
-                
-                data = await response.json()
-                datasources = data.get('datasources', {}).get('datasource', [])
-                
-                formatted_datasources = []
-                for ds in datasources:
-                    formatted_datasources.append({
-                        'id': ds.get('id'),
-                        'name': ds.get('name'),
-                        'project': ds.get('project', {}).get('name', 'Unknown')
-                    })
-                
-                response_text = f"I found {len(formatted_datasources)} datasources available to you:\n\n"
-                for i, ds in enumerate(formatted_datasources, 1):
-                    response_text += f"{i}. **{ds['name']}** (Project: {ds['project']})\n"
-                
-                return {"response": response_text, "datasources": formatted_datasources}
-                
-    except Exception as e:
-        print(f"❌ Error listing datasources: {str(e)}")
-        return {"response": f"Error retrieving datasources: {str(e)}", "datasources": []}
 
-def select_datasource_for_query(query: str, available_datasources: list) -> dict:
-    """Intelligently select the most appropriate datasource based on the query"""
-    query_lower = query.lower()
-    
-    # Simple keyword matching - can be enhanced with more sophisticated logic
-    for ds in available_datasources:
-        ds_name_lower = ds['name'].lower()
-        
-        # Check for specific keywords in datasource names
-        if 'pharmacist' in query_lower and 'pharmacist' in ds_name_lower:
-            return ds
-        if 'sales' in query_lower and 'sales' in ds_name_lower:
-            return ds
-        if 'inventory' in query_lower and 'inventory' in ds_name_lower:
-            return ds
-        if 'historical' in query_lower and 'historical' in ds_name_lower:
-            return ds
-    
-    # Default to first datasource if no specific match
-    return available_datasources[0] if available_datasources else None
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
@@ -391,58 +298,21 @@ async def read_root():
     with open("static/index.html", "r") as f:
         return HTMLResponse(content=f.read())
 
-@app.get("/datasources")
-async def get_datasources():
-    """Get list of available datasources"""
-    return await list_datasources()
+
 
 @app.post("/chat")
 async def chat(request: ChatRequest, fastapi_request: Request):
-    """Enhanced chat endpoint with iterative MCP tool calling"""
+    """Chat endpoint - ALL queries go to MCP server"""
     session_id = get_client_session_id(fastapi_request)
     
-    print(f"\n💬 Enhanced chat request from session {session_id}")
+    print(f"\n💬 Chat request from session {session_id}")
     print(f"🧠 Message: {request.message}")
     
     try:
-        # Get available datasources
-        datasources_result = await list_datasources()
-        available_datasources = datasources_result.get("datasources", [])
+        print("🚀 Sending ALL queries to MCP server...")
         
-        # Handle datasource listing requests
-        if "data sources" in request.message.lower() or "datasources" in request.message.lower() or "what data sources" in request.message.lower():
-            return ChatResponse(response=datasources_result["response"])
-        
-        # Get or select datasource
-        datasource_luid, metadata = get_client_datasource(session_id)
-        
-        if not datasource_luid:
-            selected_datasource = select_datasource_for_query(request.message, available_datasources)
-            
-            if selected_datasource:
-                print(f"📊 Selected datasource: {selected_datasource['name']} (ID: {selected_datasource['id']})")
-                store_client_datasource(session_id, selected_datasource['id'], {
-                    'name': selected_datasource['name'],
-                    'project': selected_datasource['project']
-                })
-                datasource_luid = selected_datasource['id']
-                metadata = {'name': selected_datasource['name']}
-            else:
-                print("⚠️ No suitable datasource found for query")
-                return ChatResponse(response="I apologize, but I couldn't find a suitable data source for your query. Could you please specify which data you'd like to analyze?")
-        
-        print("🚀 Using iterative MCP analysis...")
-        
-        # Prepare conversation context
-        conversation = []
-        if metadata and metadata.get('name'):
-            conversation.append({
-                'role': 'system',
-                'content': f"You are analyzing data from the {metadata.get('name')} datasource. Provide specific, data-driven answers."
-            })
-        
-        # Use iterative MCP chat
-        result = await mcp_chat_iterative(conversation, request.message, datasource_luid)
+        # Use iterative MCP chat - the MCP server handles EVERYTHING
+        result = await mcp_chat_iterative([], request.message)
         
         response_text = result.get('response', '')
         
@@ -453,9 +323,9 @@ async def chat(request: ChatRequest, fastapi_request: Request):
         return ChatResponse(response=response_text)
         
     except Exception as e:
-        print("❌ Error in enhanced chat endpoint:")
+        print("❌ Error in chat endpoint:")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Enhanced analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.post("/chat-stream")
 async def chat_stream(request: ChatRequest, fastapi_request: Request):
@@ -468,46 +338,10 @@ async def chat_stream(request: ChatRequest, fastapi_request: Request):
             # Send initial connection event
             yield f"event: progress\ndata: {json.dumps({'message': 'Connection established', 'step': 'init'})}\n\n"
             
-            # Get available datasources
-            datasources_result = await list_datasources()
-            available_datasources = datasources_result.get("datasources", [])
-            
-            # Handle datasource listing requests
-            if "data sources" in request.message.lower() or "datasources" in request.message.lower() or "what data sources" in request.message.lower():
-                yield f"event: result\ndata: {json.dumps({'response': datasources_result['response']})}\n\n"
-                yield f"event: done\ndata: {json.dumps({'message': 'Stream complete'})}\n\n"
-                return
-            
-            # Get or select datasource
-            datasource_luid, metadata = get_client_datasource(session_id)
-            
-            if not datasource_luid:
-                selected_datasource = select_datasource_for_query(request.message, available_datasources)
-                
-                if selected_datasource:
-                    store_client_datasource(session_id, selected_datasource['id'], {
-                        'name': selected_datasource['name'],
-                        'project': selected_datasource['project']
-                    })
-                    datasource_luid = selected_datasource['id']
-                    metadata = {'name': selected_datasource['name']}
-                else:
-                    yield f"event: result\ndata: {json.dumps({'response': 'I apologize, but I couldn\'t find a suitable data source for your query.'})}\n\n"
-                    yield f"event: done\ndata: {json.dumps({'message': 'Stream complete'})}\n\n"
-                    return
-            
             yield f"event: progress\ndata: {json.dumps({'message': 'Starting MCP analysis...', 'step': 'analysis-start'})}\n\n"
             
-            # Prepare conversation context
-            conversation = []
-            if metadata and metadata.get('name'):
-                conversation.append({
-                    'role': 'system',
-                    'content': f"You are analyzing data from the {metadata.get('name')} datasource. Provide specific, data-driven answers."
-                })
-            
-            # Use iterative MCP chat
-            result = await mcp_chat_iterative(conversation, request.message, datasource_luid)
+            # Use iterative MCP chat - the MCP server handles EVERYTHING
+            result = await mcp_chat_iterative([], request.message)
             
             response_text = result.get('response', '')
             
