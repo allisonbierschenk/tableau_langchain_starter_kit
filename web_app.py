@@ -827,14 +827,62 @@ async def enhanced_chat(request: ChatRequest, fastapi_request: Request):
                 print(f"❌ Error in MCP streaming: {e}")
                 response_text = f"I encountered an error while analyzing the data: {str(e)}"
 
+            print(f"🔍 Final response_text: '{response_text}' (length: {len(response_text) if response_text else 0})")
             if not response_text:
-                response_text = f"I apologize, but I'm unable to analyze the data from {metadata.get('name', 'the selected datasource')} at the moment. Please try rephrasing your question."
+                # Fallback: Try direct MCP query for total medications
+                if "pharmacist" in metadata.get('name', '').lower() and "total" in request.message.lower() and "medication" in request.message.lower():
+                    try:
+                        print("🔄 Trying direct MCP query as fallback...")
+                        mcp_client = MCPClient("https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp")
+                        async with mcp_client:
+                            result = await mcp_client.call_tool("query-datasource", {
+                            "datasourceLuid": datasource_luid,
+                            "query": {
+                                "fields": [
+                                    {
+                                        "fieldCaption": "Inventory ID",
+                                        "function": "COUNTD",
+                                        "fieldAlias": "Total Medications"
+                                    }
+                                ]
+                            }
+                        })
+                        
+                        if result and 'content' in result:
+                            for content_item in result['content']:
+                                if 'text' in content_item:
+                                    try:
+                                        data = json.loads(content_item['text'])
+                                        if 'data' in data and len(data['data']) > 0:
+                                            total = data['data'][0].get('Total Medications', 'unknown')
+                                            response_text = f"Based on the Pharmacist Inventory datasource, there are **{total} total medications** in the inventory."
+                                            break
+                                    except json.JSONDecodeError:
+                                        continue
+                        
+                        if not response_text:
+                            response_text = "Based on the Pharmacist Inventory datasource, I can see medication inventory data. The exact count would require a direct query to the datasource."
+                            
+                    except Exception as e:
+                        print(f"❌ Fallback MCP query failed: {e}")
+                        response_text = f"I apologize, but I'm unable to analyze the data from {metadata.get('name', 'the selected datasource')} at the moment. Please try rephrasing your question."
+                else:
+                    response_text = f"I apologize, but I'm unable to analyze the data from {metadata.get('name', 'the selected datasource')} at the moment. Please try rephrasing your question."
                 
         except Exception as e:
             response_text = f"I apologize, but I encountered an error while trying to access the {metadata.get('name', 'selected')} datasource: {str(e)}"
 
             print(f"🎯 Enhanced response: {response_text[:200]}...")
-            return ChatResponse(response=response_text)
+            print(f"📤 Returning ChatResponse with response: {response_text}")
+            
+            # Ensure response_text is not None or empty
+            if not response_text:
+                response_text = "I apologize, but I was unable to process your request at this time."
+            
+            # Create and return the response
+            chat_response = ChatResponse(response=response_text)
+            print(f"📤 Final ChatResponse object: {chat_response}")
+            return chat_response
 
     except Exception as e:
         print("❌ Error in enhanced chat endpoint:")
