@@ -4,7 +4,7 @@ import asyncio
 import aiohttp
 import traceback
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,9 +32,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Pydantic models
 class ChatRequest(BaseModel):
     message: str
-
-class ChatResponse(BaseModel):
-    response: str
 
 def get_client_session_id(request: Request) -> str:
     """Get client session ID for logging"""
@@ -148,7 +145,7 @@ async def mcp_chat_iterative(messages: List[Dict], query: str):
             tools_response = await mcp_client.list_tools()
             tools = tools_response if isinstance(tools_response, list) else []
             
-            print(f"🔧 Found {len(tools)} tools: {[t.get('name', 'unknown') for t in tools]}")
+            print(f"�� Found {len(tools)} tools: {[t.get('name', 'unknown') for t in tools]}")
             
             # Create OpenAI client
             openai_client = await create_openai_client()
@@ -177,9 +174,11 @@ CRITICAL INSTRUCTIONS:
    - Use list-fields to understand the data structure
    - Use query-datasource to get the actual data needed to answer the question
    - Analyze the results and provide insights
-3. Don't say "I will do X" - just do X immediately using the available tools.
-4. Provide clear, actionable insights based on the actual data retrieved.
-5. If a datasource is specified, use it. Otherwise, intelligently select the most appropriate datasource."""
+3. **CRITICAL: When users ask to "show me" or "see" a dashboard sheet/view, you MUST call get-view-image to retrieve the actual visual image.**
+4. **CRITICAL: For dashboard visualization requests, always call get-view-image after identifying the view.**
+5. Don't say "I will do X" - just do X immediately using the available tools.
+6. Provide clear, actionable insights based on the actual data retrieved.
+7. If a datasource is specified, use it. Otherwise, intelligently select the most appropriate datasource."""
             }
             
             # Prepare conversation history
@@ -312,35 +311,6 @@ async def read_root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "message": "Tableau AI Chat backend is running"}
-
-
-
-@app.post("/chat")
-async def chat(request: ChatRequest, fastapi_request: Request):
-    """Chat endpoint - ALL queries go to MCP server"""
-    session_id = get_client_session_id(fastapi_request)
-    
-    print(f"\n💬 Chat request from session {session_id}")
-    print(f"🧠 Message: {request.message}")
-    
-    try:
-        print("🚀 Sending ALL queries to MCP server...")
-        
-        # Use iterative MCP chat - the MCP server handles EVERYTHING
-        result = await mcp_chat_iterative([], request.message)
-        
-        response_text = result.get('response', '')
-        
-        if not response_text:
-            response_text = "I apologize, but I was unable to process your request at this time."
-        
-        print(f"🎯 Final response: {response_text[:200]}...")
-        return ChatResponse(response=response_text)
-        
-    except Exception as e:
-        print("❌ Error in chat endpoint:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.post("/chat-stream")
 async def chat_stream(request: ChatRequest, fastapi_request: Request):

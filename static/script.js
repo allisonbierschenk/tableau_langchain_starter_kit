@@ -54,43 +54,17 @@ function showTypingIndicator(show = true) {
     }
 }
 
-// --- Improved MCP Detection ---
-function shouldUseMCP(message) {
-    const mcpKeywords = [
-        'insight', 'insights', 'metric', 'metrics', 'kpi', 'pulse', 'dashboard',
-        'analytics', 'performance', 'trend', 'trends', 'analysis', 'visualiz',
-        'chart', 'graph', 'plot', 'business intelligence', 'bi', 'top', 'best',
-        'worst', 'focus', 'proactive', 'recommend', 'should', 'opportunity',
-        'risk', 'pattern', 'anomaly', 'compare', 'comparison', 'overview',
-        'summary', 'key', 'important', 'critical', 'highlight'
-    ];
-    
-    const lowerMessage = message.toLowerCase();
-    
-    // Also trigger MCP for questions that sound analytical
-    const analyticalPatterns = [
-        /what.*should.*focus/i,
-        /what.*insights?/i,
-        /tell me about/i,
-        /show me.*top/i,
-        /what.*important/i,
-        /what.*key/i,
-        /give me.*analysis/i,
-        /help me understand/i
-    ];
-    
-    return mcpKeywords.some(keyword => lowerMessage.includes(keyword)) ||
-           analyticalPatterns.some(pattern => pattern.test(message));
-}
-
-// --- Enhanced Streaming Chat with Better Error Handling ---
+// --- Simplified Chat - Always Use MCP/Analyst Agent ---
 async function sendMessage() {
+    console.log('🚀 sendMessage called');
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
     if (!message) {
         input.focus();
         return;
     }
+
+    console.log('📝 Message:', message);
 
     // Prevent sending multiple messages simultaneously
     if (currentStream) {
@@ -114,42 +88,25 @@ async function sendMessage() {
     const botMessageId = 'bot-response-' + Date.now();
     let fullResponse = '';
     let hasStartedResponse = false;
-    let usedMCP = false;
 
     try {
+        console.log('🔧 Creating AbortController');
         const controller = new AbortController();
         currentStream = controller;
 
-        // Determine which endpoint to use
-        usedMCP = shouldUseMCP(message);
-        console.log(`🔄 Using ${usedMCP ? 'MCP streaming' : 'traditional'} endpoint for: "${message}"`);
+        // Always use MCP/Analyst Agent endpoint
+        console.log(`🚀 Using MCP/Analyst Agent for: "${message}"`);
 
-        if (usedMCP) {
-            // Try MCP first
-            try {
-                showTypingIndicator();
-                fullResponse = await handleMCPRequest(message, controller, botMessageId);
-                hasStartedResponse = true;
-            } catch (mcpError) {
-                console.warn('MCP failed, falling back to traditional agent:', mcpError);
-                showTypingIndicator(false);
-                addMessage("🔄 <em>Switching to traditional analysis...</em>", "bot");
-                
-                // Fallback to traditional endpoint
-                fullResponse = await handleTraditionalRequest(message, controller);
-                hasStartedResponse = true;
-            }
-        } else {
-            // Use traditional endpoint directly
-            showTypingIndicator();
-            fullResponse = await handleTraditionalRequest(message, controller);
-            hasStartedResponse = true;
-        }
+        showTypingIndicator();
+        console.log('📡 Calling handleMCPRequest');
+        fullResponse = await handleMCPRequest(message, controller, botMessageId);
+        console.log('✅ handleMCPRequest completed, response:', fullResponse);
+        hasStartedResponse = true;
 
         // Display final response if we have one
         if (fullResponse && hasStartedResponse) {
             showTypingIndicator(false);
-            addMessage(formatResponse(fullResponse), 'bot', botMessageId);
+            // Response is already displayed by the streaming handler
             conversationHistory.push({ role: 'assistant', content: fullResponse });
         } else if (!hasStartedResponse) {
             // If nothing worked, show error
@@ -158,86 +115,74 @@ async function sendMessage() {
         }
 
     } catch (error) {
+        console.error('❌ Error in sendMessage:', error);
         showTypingIndicator(false);
-        console.error('Chat error:', error);
         
-        let errorMessage = error.message;
+        // Enhanced error handling
+        let errorMessage = "❌ I encountered an error while processing your request.";
+        
         if (error.name === 'AbortError') {
-            errorMessage = 'Request was cancelled.';
+            errorMessage = "⏹️ Request was cancelled.";
         } else if (error.message.includes('Failed to fetch')) {
-            errorMessage = 'Unable to connect to the server. Please check your connection and try again.';
+            errorMessage = "🌐 Connection error. Please check your internet connection and try again.";
+        } else if (error.message.includes('HTTP')) {
+            errorMessage = `🔧 Server error: ${error.message}. Please try again later.`;
         }
         
-        addMessage(`❌ <strong>Error:</strong><br>${escapeHtml(errorMessage)}<br><br>💡 <em>Try asking a more specific question about your data.</em>`, 'bot', botMessageId);
+        addMessage(errorMessage, 'bot', botMessageId);
     } finally {
         // Reset UI state
-        currentStream = null;
         input.disabled = false;
         sendBtn.disabled = false;
         sendBtn.innerHTML = 'Send';
-        input.focus();
+        currentStream = null;
     }
 }
 
 // --- Handle MCP Request ---
 async function handleMCPRequest(message, controller, botMessageId) {
-    const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
-        method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'text/event-stream',
-            'X-Session-ID': generateSessionId()
-        },
-        body: JSON.stringify({
-            messages: conversationHistory.slice(-10),
-            query: message
-        }),
-        signal: controller.signal
-    });
+    console.log('📡 handleMCPRequest called with message:', message);
+    console.log('🌐 API_BASE_URL:', API_BASE_URL);
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/chat-stream`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
+                'X-Session-ID': generateSessionId()
+            },
+            body: JSON.stringify({ message }),
+            signal: controller.signal
+        });
 
-    if (!response.ok) {
-        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorMessage;
-        } catch (e) {
-            // If we can't parse JSON, use the status text
+        console.log('📡 Response status:', response.status);
+        console.log('📡 Response headers:', response.headers);
+
+        if (!response.ok) {
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.detail || errorMessage;
+            } catch (e) {
+                // If we can't parse JSON, use the status text
+            }
+            throw new Error(errorMessage);
         }
-        throw new Error(errorMessage);
+
+        console.log('📡 Calling handleMCPStreamingResponse');
+        const result = await handleMCPStreamingResponse(response, botMessageId);
+        console.log('✅ handleMCPStreamingResponse completed, result:', result);
+        return result;
+    } catch (error) {
+        console.error('❌ Error in handleMCPRequest:', error);
+        throw error;
     }
-
-    return await handleMCPStreamingResponse(response, botMessageId);
-}
-
-// --- Handle Traditional Request ---
-async function handleTraditionalRequest(message, controller) {
-    const response = await fetch(`${API_BASE_URL}/chat`, {
-        method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            'X-Session-ID': generateSessionId()
-        },
-        body: JSON.stringify({ message }),
-        signal: controller.signal
-    });
-
-    if (!response.ok) {
-        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorMessage;
-        } catch (e) {
-            // If we can't parse JSON, use the status text
-        }
-        throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data.response || 'No response received';
 }
 
 // --- Enhanced MCP Streaming Response Handler ---
 async function handleMCPStreamingResponse(response, botMessageId) {
+    console.log('📡 handleMCPStreamingResponse called');
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -254,11 +199,16 @@ async function handleMCPStreamingResponse(response, botMessageId) {
     let botMessageDiv = addMessage('', 'bot', botMessageId);
 
     try {
+        console.log('📡 Starting to read stream');
         while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+                console.log('📡 Stream done');
+                break;
+            }
 
             buffer += decoder.decode(value, { stream: true });
+            console.log('📡 Buffer received:', buffer);
             const events = buffer.split('\n\n');
             buffer = events.pop() || ''; // Keep incomplete event in buffer
 
@@ -286,11 +236,14 @@ async function handleMCPStreamingResponse(response, botMessageId) {
                         }
                     }
 
+                    console.log('📡 Event type:', eventType, 'Event data:', eventData);
+
                     if (eventType && eventData) {
                         if (eventType === 'progress' && progressDiv) {
                             handleMCPProgressEvent(eventData, progressDiv);
                         } else if (eventType === 'result') {
                             fullResponse = eventData.response || '';
+                            console.log('📡 Result event, fullResponse:', fullResponse);
                             if (fullResponse) {
                                 // Enhanced formatting for MCP results
                                 botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
@@ -300,10 +253,17 @@ async function handleMCPStreamingResponse(response, botMessageId) {
                                 progressDiv.remove();
                                 progressDiv = null;
                             }
-                            break;
+                            
+                            // Auto-display dashboard image if user requested it
+                            if (message && shouldDisplayDashboardImage(message)) {
+                                console.log('🖼️ Auto-displaying dashboard image based on user request');
+                                setTimeout(() => displayDashboardImage(), 500);
+                            }
+                            // Don't break here - wait for done event
                         } else if (eventType === 'error') {
                             throw new Error(eventData.error || 'Unknown MCP stream error');
                         } else if (eventType === 'done') {
+                            console.log('📡 Done event received');
                             if (progressDiv) {
                                 progressDiv.remove();
                             }
@@ -322,6 +282,7 @@ async function handleMCPStreamingResponse(response, botMessageId) {
             throw new Error('No response received from MCP analysis');
         }
 
+        console.log('📡 Returning fullResponse:', fullResponse);
         return fullResponse;
 
     } finally {
@@ -444,24 +405,6 @@ function formatDataTables(text) {
             return match;
         }
     });
-}
-
-// --- Standard Response Formatting Helper ---
-function formatResponse(text) {
-    if (!text) return '';
-    
-    let formatted = text
-        .replace(/\n/g, '<br>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // **bold**
-        .replace(/\*(.*?)\*/g, '<em>$1</em>') // *italic*
-        .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
-        .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
-
-    // Add insight formatting for regular responses too
-    formatted = formatInsightBoxes(formatted);
-    formatted = formatDataTables(formatted);
-    
-    return formatted;
 }
 
 // --- HTML Escaping Helper ---
