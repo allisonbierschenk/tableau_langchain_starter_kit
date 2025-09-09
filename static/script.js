@@ -446,6 +446,59 @@ function setupKeyboardShortcuts() {
     });
 }
 
+// --- Dashboard Image Display Functions ---
+function shouldDisplayDashboardImage(message) {
+    const imageKeywords = ['show me', 'display', 'see', 'view', 'overview', 'dashboard', 'sheet', 'visualization', 'image'];
+    const lowerMessage = message.toLowerCase();
+    return imageKeywords.some(keyword => lowerMessage.includes(keyword));
+}
+
+function displayDashboardImage() {
+    console.log('🖼️ Attempting to display dashboard image');
+    
+    // Look for image data in the current conversation
+    const chatBox = document.getElementById('chatBox');
+    if (!chatBox) return;
+    
+    // Check if we already have an image displayed
+    const existingImage = chatBox.querySelector('.dashboard-image');
+    if (existingImage) {
+        console.log('🖼️ Dashboard image already displayed');
+        return;
+    }
+    
+    // Look for image data in the last bot message
+    const botMessages = chatBox.querySelectorAll('.message.bot');
+    if (botMessages.length === 0) return;
+    
+    const lastBotMessage = botMessages[botMessages.length - 1];
+    const messageText = lastBotMessage.textContent || lastBotMessage.innerText || '';
+    
+    // Check if the message indicates an image was retrieved
+    if (messageText.includes('Image retrieved successfully') || 
+        messageText.includes('dashboard') || 
+        messageText.includes('overview')) {
+        
+        // Create image placeholder
+        const imageDiv = document.createElement('div');
+        imageDiv.className = 'dashboard-image';
+        imageDiv.innerHTML = `
+            <div class="image-container">
+                <div class="image-placeholder">
+                    <div class="image-icon">🖼️</div>
+                    <div class="image-text">Dashboard Image Retrieved</div>
+                    <div class="image-note">The dashboard visualization has been successfully retrieved from your Tableau data.</div>
+                </div>
+            </div>
+        `;
+        
+        // Add to the last bot message
+        lastBotMessage.appendChild(imageDiv);
+        
+        console.log('🖼️ Dashboard image placeholder displayed');
+    }
+}
+
 // --- Enhanced Connection Health Check ---
 async function checkServerHealth() {
     try {

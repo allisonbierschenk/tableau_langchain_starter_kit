@@ -347,6 +347,7 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "message": "Tableau AI Chat backend is running"}
 
+
 @app.post("/chat-stream")
 async def chat_stream(request: ChatRequest, fastapi_request: Request):
     """Streaming chat endpoint with SSE"""
