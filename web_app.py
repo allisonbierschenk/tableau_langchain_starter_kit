@@ -20,9 +20,16 @@ app = FastAPI()
 # Add CORS middleware for Tableau extension support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Tableau domain
+    allow_origins=[
+        "https://tableau-langchain-starter-kit.vercel.app",
+        "http://localhost:8000",
+        "http://localhost:3000",
+        "https://*.tableau.com",
+        "https://*.tableauonline.com",
+        "https://*.tableaupublic.com"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
