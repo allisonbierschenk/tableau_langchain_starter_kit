@@ -91,37 +91,66 @@ class MCPClient:
 
     async def call_tool(self, name: str, arguments: dict):
         """Execute a tool on the MCP server"""
-        async with self.session.post(
-            f"{self.server_url}/",
-            json={
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "params": {
-                    "name": name,
-                    "arguments": arguments
+        try:
+            async with self.session.post(
+                f"{self.server_url}/",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "name": name,
+                        "arguments": arguments
+                    },
+                    "id": 1
                 },
-                "id": 1
-            },
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"Tool execution failed: {response.status} - {error_text}")
-            
-            # Parse the streaming response
-            async for line in response.content:
-                line = line.decode('utf-8').strip()
-                if line.startswith('data: '):
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream"
+                }
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    print(f"❌ MCP Server Error: {response.status} - {error_text}")
+                    raise Exception(f"Tool execution failed: {response.status} - {error_text}")
+                
+                # Special handling for get-view-image - read full content at once
+                if name == "get-view-image":
+                    print(f"🖼️ Reading full image response for {name}")
                     try:
-                        data = json.loads(line[6:])
-                        if 'result' in data:
-                            return data['result']
-                    except json.JSONDecodeError:
-                        continue
-            return {"content": "No response received"}
+                        # Read the entire response content
+                        full_content = await response.read()
+                        content_str = full_content.decode('utf-8')
+                        
+                        # Parse the streaming response
+                        for line in content_str.split('\n'):
+                            line = line.strip()
+                            if line.startswith('data: '):
+                                try:
+                                    data = json.loads(line[6:])
+                                    if 'result' in data:
+                                        print(f"✅ Image data received successfully")
+                                        return data['result']
+                                except json.JSONDecodeError:
+                                    continue
+                        return {"content": "No image data found in response"}
+                    except Exception as img_error:
+                        print(f"❌ Image processing error: {img_error}")
+                        raise Exception(f"Failed to process image response: {img_error}")
+                else:
+                    # For other tools, use streaming approach
+                    async for line in response.content:
+                        line = line.decode('utf-8').strip()
+                        if line.startswith('data: '):
+                            try:
+                                data = json.loads(line[6:])
+                                if 'result' in data:
+                                    return data['result']
+                            except json.JSONDecodeError:
+                                continue
+                    return {"content": "No response received"}
+        except Exception as e:
+            print(f"❌ MCP Connection Error: {str(e)}")
+            raise Exception(f"Failed to connect to MCP server: {str(e)}")
 
 async def create_openai_client():
     """Create OpenAI client"""
@@ -254,6 +283,12 @@ CRITICAL INSTRUCTIONS:
                             "content": json.dumps(result),
                             "tool_call_id": tool_call.id
                         })
+                        
+                        # Special handling for get-view-image - don't include large image data in context
+                        if tool_call.function.name == "get-view-image":
+                            print(f"🖼️ Image tool executed successfully - not including large data in context")
+                            # Replace the large image data with a simple success message
+                            current_messages[-1]["content"] = json.dumps({"success": "Image retrieved successfully", "note": "Large image data available for display"})
                         
                     except Exception as tool_error:
                         print(f"❌ {tool_call.function.name} FAILED: {tool_error}")
