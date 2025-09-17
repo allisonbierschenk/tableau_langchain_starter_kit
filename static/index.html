@@ -10,9 +10,12 @@
     
     <!-- Configuration - Set your deployed backend URL here -->
     <script>
-        // For local development, use localhost:8000
-        // For production, use: 'https://tableau-langchain-starter-kit.vercel.app'
-        window.API_BASE_URL = 'https://tableau-langchain-starter-kit.vercel.app';
+        // Auto-detect environment: use localhost for local development, production URL for deployment
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            window.API_BASE_URL = 'http://localhost:8000';
+        } else {
+            window.API_BASE_URL = 'https://tableau-langchain-starter-kit.vercel.app';
+        }
     </script>
     
     <script src="static/script.js" defer></script>

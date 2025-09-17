@@ -1,7 +1,9 @@
 // script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
 // Configuration - Set your deployed backend URL here
-const API_BASE_URL = window.API_BASE_URL || 'https://tableau-langchain-starter-kit.vercel.app';
+const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? 'http://localhost:8000' 
+    : 'https://tableau-langchain-starter-kit.vercel.app');
 
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
@@ -171,7 +173,7 @@ async function handleMCPRequest(message, controller, botMessageId) {
         }
 
         console.log('📡 Calling handleMCPStreamingResponse');
-        const result = await handleMCPStreamingResponse(response, botMessageId);
+        const result = await handleMCPStreamingResponse(response, botMessageId, message);
         console.log('✅ handleMCPStreamingResponse completed, result:', result);
         return result;
     } catch (error) {
@@ -181,13 +183,15 @@ async function handleMCPRequest(message, controller, botMessageId) {
 }
 
 // --- Enhanced MCP Streaming Response Handler ---
-async function handleMCPStreamingResponse(response, botMessageId) {
+async function handleMCPStreamingResponse(response, botMessageId, originalMessage = '') {
     console.log('📡 handleMCPStreamingResponse called');
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let fullResponse = '';
     let progressDiv = null;
+    let isComplete = false;
+    let timeoutId = null;
 
     // Remove typing indicator when we start receiving real data
     showTypingIndicator(false);
@@ -200,10 +204,24 @@ async function handleMCPStreamingResponse(response, botMessageId) {
 
     try {
         console.log('📡 Starting to read stream');
-        while (true) {
+        
+        // Set a timeout to prevent infinite analyzing state
+        timeoutId = setTimeout(() => {
+            if (!isComplete) {
+                console.warn('⚠️ Stream timeout - forcing completion');
+                if (progressDiv) {
+                    progressDiv.remove();
+                    progressDiv = null;
+                }
+                isComplete = true;
+            }
+        }, 30000); // 30 second timeout
+        
+        while (true && !isComplete) {
             const { done, value } = await reader.read();
             if (done) {
                 console.log('📡 Stream done');
+                clearTimeout(timeoutId);
                 break;
             }
 
@@ -248,25 +266,24 @@ async function handleMCPStreamingResponse(response, botMessageId) {
                                 // Enhanced formatting for MCP results
                                 botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
                             }
-                            // Remove progress indicator
+                            // Remove progress indicator immediately when we get results
                             if (progressDiv) {
                                 progressDiv.remove();
                                 progressDiv = null;
                             }
                             
                             // Auto-display dashboard image if user requested it
-                            if (message && shouldDisplayDashboardImage(message)) {
+                            if (originalMessage && shouldDisplayDashboardImage(originalMessage)) {
                                 console.log('🖼️ Auto-displaying dashboard image based on user request');
                                 setTimeout(() => displayDashboardImage(), 500);
                             }
-                            // Don't break here - wait for done event
+                            // Mark as complete but continue to wait for done event
+                            isComplete = true;
                         } else if (eventType === 'error') {
                             throw new Error(eventData.error || 'Unknown MCP stream error');
                         } else if (eventType === 'done') {
                             console.log('📡 Done event received');
-                            if (progressDiv) {
-                                progressDiv.remove();
-                            }
+                            isComplete = true;
                             break;
                         }
                     }
@@ -286,6 +303,12 @@ async function handleMCPStreamingResponse(response, botMessageId) {
         return fullResponse;
 
     } finally {
+        // Clear timeout if it exists
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+        
+        // Ensure progress indicator is removed
         if (progressDiv) {
             progressDiv.remove();
         }
@@ -518,6 +541,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
+    // Debug: Show which API URL is being used
+    console.log('🌐 Using API URL:', API_BASE_URL);
+    console.log('🌐 Current hostname:', window.location.hostname);
+
     // Setup event listeners
     if (messageInput) messageInput.addEventListener('keypress', handleEnter);
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
@@ -532,7 +559,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Check server health
     const serverHealthy = await checkServerHealth();
     if (!serverHealthy) {
-        addMessage("⚠️ <strong>Server Connection Issue</strong><br>Unable to connect to the backend server. Please ensure the Python server is running and accessible.", "bot");
+        addMessage(`⚠️ <strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
         return;
     }
 
