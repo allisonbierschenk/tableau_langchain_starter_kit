@@ -1,5 +1,9 @@
 # Deployment Guide
 
+## 🚀 **LangChain Implementation**
+
+This project now uses **LangChain** instead of direct API calls, providing better tool orchestration, conversation memory, and maintainability.
+
 ## Environment Variables Required
 
 For the app to work in production, you need to set the following environment variable in your Vercel deployment:

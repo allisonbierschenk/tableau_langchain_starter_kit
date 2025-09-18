@@ -147,7 +147,7 @@ async function handleMCPRequest(message, controller, botMessageId) {
     console.log('🌐 API_BASE_URL:', API_BASE_URL);
     
     try {
-        const response = await fetch(`${API_BASE_URL}/chat-stream`, {
+        const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
@@ -215,7 +215,7 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                 }
                 isComplete = true;
             }
-        }, 30000); // 30 second timeout
+        }, 60000); // 60 second timeout
         
         while (true && !isComplete) {
             const { done, value } = await reader.read();
@@ -260,11 +260,25 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                         if (eventType === 'progress' && progressDiv) {
                             handleMCPProgressEvent(eventData, progressDiv);
                         } else if (eventType === 'result') {
-                            fullResponse = eventData.response || '';
+                            // Handle both old format and new format
+                            if (eventData.data && eventData.data.response) {
+                                fullResponse = eventData.data.response;
+                                // Store tool results for datasource info
+                                if (eventData.data.tool_results) {
+                                    window.lastToolResults = eventData.data.tool_results;
+                                }
+                            } else {
+                                fullResponse = eventData.response || '';
+                                // Store tool results for datasource info (new format)
+                                if (eventData.tool_results) {
+                                    window.lastToolResults = eventData.tool_results;
+                                }
+                            }
                             console.log('📡 Result event, fullResponse:', fullResponse);
+                            console.log('📊 Tool results for datasource extraction:', window.lastToolResults);
                             if (fullResponse) {
-                                // Enhanced formatting for MCP results
-                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
+                                // Enhanced formatting for MCP results with datasource info
+                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse, window.lastToolResults);
                             }
                             // Remove progress indicator immediately when we get results
                             if (progressDiv) {
@@ -319,8 +333,42 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
 function handleMCPProgressEvent(eventData, progressDiv) {
     if (eventData.message) {
         const icon = getMCPProgressIcon(eventData.step);
-        const iteration = eventData.iteration ? ` (Step ${eventData.iteration}/${eventData.maxIterations || 'N/A'})` : '';
-        progressDiv.innerHTML = `<div class="mcp-progress">${icon} <em>${escapeHtml(eventData.message)}${iteration}</em></div>`;
+        let userFriendlyMessage = eventData.message;
+        
+        // Convert technical messages to user-friendly ones
+        if (eventData.step === 'discover-tools') {
+            userFriendlyMessage = "🔍 Discovering available data analysis tools...";
+        } else if (eventData.step === 'tools-discovered') {
+            userFriendlyMessage = `🛠️ Found ${eventData.tools ? eventData.tools.length : 0} analysis tools ready to use`;
+        } else if (eventData.step === 'iteration') {
+            userFriendlyMessage = `🧠 Thinking through your question (Step ${eventData.iteration || 1})...`;
+        } else if (eventData.step === 'executing-tools') {
+            userFriendlyMessage = `⚙️ Analyzing your data (${eventData.tool_count || 1} analysis step${eventData.tool_count > 1 ? 's' : ''})...`;
+        } else if (eventData.step === 'tool-executing') {
+            if (eventData.tool === 'list-datasources') {
+                userFriendlyMessage = "📊 Exploring available data sources...";
+            } else if (eventData.tool === 'list-fields') {
+                userFriendlyMessage = "🔍 Examining data structure and available fields...";
+            } else if (eventData.tool === 'query-datasource') {
+                userFriendlyMessage = "📈 Querying data to find insights...";
+            } else {
+                userFriendlyMessage = `🔧 ${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}...`;
+            }
+        } else if (eventData.step === 'tool-completed') {
+            if (eventData.tool === 'list-datasources') {
+                userFriendlyMessage = "✅ Data sources identified";
+            } else if (eventData.tool === 'list-fields') {
+                userFriendlyMessage = "✅ Data structure analyzed";
+            } else if (eventData.tool === 'query-datasource') {
+                userFriendlyMessage = "✅ Data query completed";
+            } else {
+                userFriendlyMessage = `✅ ${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} completed`;
+            }
+        } else if (eventData.step === 'final-response') {
+            userFriendlyMessage = "📝 Preparing your personalized insights...";
+        }
+        
+        progressDiv.innerHTML = `<div class="mcp-progress" data-step="${eventData.step || 'default'}">${icon} <em>${userFriendlyMessage}</em></div>`;
     }
 }
 
@@ -344,7 +392,7 @@ function getMCPProgressIcon(step) {
 }
 
 // --- Enhanced Response Formatting for MCP Results ---
-function formatMCPResponse(text) {
+function formatMCPResponse(text, toolResults = null) {
     if (!text) return '';
     
     let formatted = text
@@ -354,11 +402,65 @@ function formatMCPResponse(text) {
         .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
         .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
 
+    // Add datasource information if available
+    if (toolResults && toolResults.length > 0) {
+        const datasources = extractDatasourceNames(toolResults);
+        console.log('📊 Datasources:', datasources);
+        console.log('📊 Tool Results:', toolResults);
+        if (datasources.length > 0) {
+            formatted += '<br><br><div class="datasource-info">📊 <strong>Data Sources Used:</strong> ' + datasources.join(', ') + '</div>';
+        }
+    }
+
     // Enhanced formatting for data tables and insights
     formatted = formatDataTables(formatted);
     formatted = formatInsightBoxes(formatted);
     
     return formatted;
+}
+
+// --- Extract Datasource Names from Tool Results ---
+function extractDatasourceNames(toolResults) {
+    const datasources = new Set();
+    
+    // First, collect all datasource info from list-datasources results
+    const datasourceMap = new Map();
+    for (const result of toolResults) {
+        if (result.tool === 'list-datasources' && result.result) {
+            try {
+                let data;
+                if (Array.isArray(result.result) && result.result[0] && result.result[0].text) {
+                    data = JSON.parse(result.result[0].text);
+                } else if (typeof result.result === 'string') {
+                    data = JSON.parse(result.result);
+                } else {
+                    data = result.result;
+                }
+                
+                if (Array.isArray(data)) {
+                    data.forEach(ds => {
+                        if (ds.id && ds.name) {
+                            datasourceMap.set(ds.id, ds.name);
+                        }
+                    });
+                }
+            } catch (e) {
+                console.warn('Failed to parse datasource data:', e);
+            }
+        }
+    }
+    
+    // Then, only add datasources that were actually queried
+    for (const result of toolResults) {
+        if (result.tool === 'query-datasource' && result.arguments && result.arguments.datasourceLuid) {
+            const datasourceName = datasourceMap.get(result.arguments.datasourceLuid);
+            if (datasourceName) {
+                datasources.add(datasourceName);
+            }
+        }
+    }
+    
+    return Array.from(datasources);
 }
 
 // --- Format Insight Boxes ---
