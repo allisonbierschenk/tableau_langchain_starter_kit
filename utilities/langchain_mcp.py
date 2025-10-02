@@ -28,30 +28,290 @@ load_dotenv()
 MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
 MAX_MCP_ITERATIONS = 10  # Reduced for efficiency
 
-# System prompt similar to e-bikes demo
-TABLEAU_SYSTEM_PROMPT = """You are an expert Tableau data analyst that can answer diverse business questions using available tools.
+# Learning and Memory System
+class LearningMemory:
+    """Intelligent memory system for learning from successes and failures"""
+    
+    def __init__(self):
+        self.successful_patterns = {}
+        self.failed_patterns = {}
+        self.field_mappings = {}
+        self.datasource_preferences = {}
+        self.error_recovery_strategies = {}
+    
+    def learn_success(self, question_type: str, approach: dict, result: dict):
+        """Remember successful approaches for future use"""
+        if question_type not in self.successful_patterns:
+            self.successful_patterns[question_type] = []
+        self.successful_patterns[question_type].append({
+            "approach": approach,
+            "result_summary": result.get("summary", "success"),
+            "timestamp": asyncio.get_event_loop().time()
+        })
+    
+    def learn_failure(self, question_type: str, approach: dict, error: str):
+        """Remember failed approaches to avoid repeating them"""
+        if question_type not in self.failed_patterns:
+            self.failed_patterns[question_type] = []
+        self.failed_patterns[question_type].append({
+            "approach": approach,
+            "error": error,
+            "timestamp": asyncio.get_event_loop().time()
+        })
+    
+    def get_best_approach(self, question_type: str) -> dict:
+        """Get the best approach based on learned patterns"""
+        if question_type in self.successful_patterns:
+            # Return the most recent successful approach
+            return self.successful_patterns[question_type][-1]["approach"]
+        return {"strategy": "explore", "datasource": "auto", "fields": "discover"}
+    
+    def should_avoid_approach(self, question_type: str, approach: dict) -> bool:
+        """Check if we should avoid a particular approach based on past failures"""
+        if question_type in self.failed_patterns:
+            for failed in self.failed_patterns[question_type]:
+                if self._approaches_similar(failed["approach"], approach):
+                    return True
+        return False
+    
+    def _approaches_similar(self, approach1: dict, approach2: dict) -> bool:
+        """Check if two approaches are similar enough to avoid repetition"""
+        return (approach1.get("datasource") == approach2.get("datasource") and
+                approach1.get("strategy") == approach2.get("strategy"))
+    
+    def get_error_recovery_strategy(self, error: str) -> dict:
+        """Get recovery strategy based on error type"""
+        if "Unknown Field" in error:
+            return {"strategy": "field_discovery", "action": "list_fields_first"}
+        elif "Invalid arguments" in error:
+            return {"strategy": "argument_fix", "action": "simplify_arguments"}
+        elif "datasource" in error.lower():
+            return {"strategy": "datasource_switch", "action": "try_alternative_datasource"}
+        else:
+            return {"strategy": "general_recovery", "action": "simplify_and_retry"}
 
-CRITICAL EFFICIENCY RULES:
-1. **Be Strategic**: Focus on the most relevant datasources first. For business questions, prioritize "Superstore" datasources.
-2. **Be Comprehensive**: When asked for "all" data, query ALL relevant datasources (not just one). Look for datasources with similar names.
-3. **Be Efficient**: Don't query every datasource. Use list-datasources to identify the best matches, then query all relevant ones.
-4. **Be Practical**: For large datasets, start with COUNT queries to understand scale before detailed analysis.
-5. **Be Direct**: Answer the specific question asked. Don't over-analyze unless requested.
+# Global learning memory instance
+learning_memory = LearningMemory()
 
-TOOL USAGE SEQUENCE:
-- **Discovery**: Use list-datasources to find relevant data
-- **Schema**: Use list-fields to understand available fields 
-- **Analysis**: Use query-datasource with appropriate filters and aggregations
-- **Insights**: Provide clear, actionable answers
+# Helper functions for intelligent error recovery
+def _identify_question_type(query: str) -> str:
+    """Identify the type of question to help with learning and recovery"""
+    query_lower = query.lower()
+    
+    if any(word in query_lower for word in ["medication", "pharmacy", "drug", "expir", "inventory"]):
+        return "pharmacy"
+    elif any(word in query_lower for word in ["sales", "profit", "customer", "product", "revenue", "best", "top", "sellers"]):
+        return "sales"
+    elif any(word in query_lower for word in ["list", "show", "what", "available"]):
+        return "discovery"
+    else:
+        return "general"
+
+async def _try_alternative_approach(tool_name: str, tool_args: dict, error: str, 
+                                  recovery_strategy: dict, mcp_client, langchain_tools, query: str):
+    """Try alternative approaches based on error type and recovery strategy"""
+    
+    try:
+        if recovery_strategy["strategy"] == "field_discovery":
+            # Try listing fields first to understand structure
+            if "datasourceLuid" in tool_args:
+                print("🔍 Trying field discovery approach...")
+                for tool in langchain_tools:
+                    if tool.name == "list-fields":
+                        result = await tool._arun(datasourceLuid=tool_args["datasourceLuid"])
+                        return {
+                            "tool": "list-fields",
+                            "arguments": {"datasourceLuid": tool_args["datasourceLuid"]},
+                            "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                        }
+        
+        elif recovery_strategy["strategy"] == "argument_fix":
+            # Try simplifying arguments
+            print("🔧 Trying simplified arguments...")
+            simplified_args = _simplify_arguments(tool_args)
+            for tool in langchain_tools:
+                if tool.name == tool_name:
+                    result = await tool._arun(**simplified_args)
+                    return {
+                        "tool": tool_name,
+                        "arguments": simplified_args,
+                        "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                    }
+        
+        elif recovery_strategy["strategy"] == "datasource_switch":
+            # Try alternative datasource
+            print("🔄 Trying alternative datasource...")
+            alternative_datasource = _find_alternative_datasource(tool_args, query)
+            if alternative_datasource:
+                modified_args = tool_args.copy()
+                modified_args["datasourceLuid"] = alternative_datasource
+                for tool in langchain_tools:
+                    if tool.name == tool_name:
+                        result = await tool._arun(**modified_args)
+                        return {
+                            "tool": tool_name,
+                            "arguments": modified_args,
+                            "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                        }
+        
+        elif recovery_strategy["strategy"] == "general_recovery":
+            # Try a completely different approach
+            print("🔄 Trying general recovery approach...")
+            return await _try_general_recovery(query, mcp_client, langchain_tools)
+    
+    except Exception as recovery_error:
+        print(f"❌ Recovery attempt failed: {str(recovery_error)}")
+    
+    return None
+
+def _simplify_arguments(tool_args: dict) -> dict:
+    """Simplify tool arguments to avoid complex formatting issues"""
+    simplified = tool_args.copy()
+    
+    if "query" in simplified and isinstance(simplified["query"], dict):
+        # Simplify query structure
+        query = simplified["query"]
+        if "fields" in query and len(query["fields"]) > 2:
+            # Reduce to just 2 most important fields
+            query["fields"] = query["fields"][:2]
+        if "filters" in query and len(query["filters"]) > 1:
+            # Remove complex filters
+            query["filters"] = []
+    
+    return simplified
+
+def _find_alternative_datasource(tool_args: dict, query: str) -> str:
+    """Find alternative datasource based on query context"""
+    query_lower = query.lower()
+    
+    # For pharmacy questions, try different pharmacy datasources
+    if any(word in query_lower for word in ["medication", "pharmacy", "drug"]):
+        pharmacy_datasources = [
+            "50814edc-e918-4d9d-9248-9e6fb9d45d76",  # Pharmacist Inventory (Enriched)
+            "96601c25-eca8-4072-90e3-27f25f667638",  # Pharmacist Inventory
+            "462cc170-c1c8-4f0f-9dcc-1eac6ebdc9ef"   # pharmacy_dashboard_data_john
+        ]
+        for ds in pharmacy_datasources:
+            if ds != tool_args.get("datasourceLuid"):
+                return ds
+    
+    # For sales questions, try different sales datasources
+    elif any(word in query_lower for word in ["sales", "profit", "customer"]):
+        sales_datasources = [
+            "d8c8b547-19a9-4850-9b3e-83afdcc691c5",  # Superstore Datasource (Samples)
+            "e7156c17-345f-4d92-a315-f6abba2aec14",  # Superstore Datasource (default)
+            "9d3d16b9-3c50-40c3-bfe2-2b80b4db641e"   # Databricks-Superstore
+        ]
+        for ds in sales_datasources:
+            if ds != tool_args.get("datasourceLuid"):
+                return ds
+    
+    return None
+
+async def _try_general_recovery(query: str, mcp_client, langchain_tools):
+    """Try a general recovery approach by exploring available data"""
+    try:
+        # Start with listing datasources to understand what's available
+        for tool in langchain_tools:
+            if tool.name == "list-datasources":
+                result = await tool._arun()
+                return {
+                    "tool": "list-datasources",
+                    "arguments": {},
+                    "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                }
+    except Exception as e:
+        print(f"❌ General recovery failed: {str(e)}")
+    
+    return None
+
+def _get_contextual_guidance(query: str, question_type: str, best_approach: dict) -> str:
+    """Provide contextual guidance based on question type and learned patterns"""
+    
+    guidance = []
+    
+    if question_type == "pharmacy":
+        guidance.extend([
+            "🏥 PHARMACY DOMAIN: This question involves medication/pharmacy data",
+            "📊 RECOMMENDED DATASOURCES: Look for 'Pharmacist Inventory' or 'pharmacy' datasources",
+            "🔍 KEY FIELDS: Drug Name, Expiration Date, Daily Quantity Remaining, Location",
+            "💡 SPECIAL FEATURES: Use 'Expiration Buckets' field for expiration queries"
+        ])
+    elif question_type == "sales":
+        guidance.extend([
+            "💰 SALES DOMAIN: This question involves business/sales data",
+            "📊 CRITICAL: Query ALL sales datasources for comprehensive analysis",
+            "🔍 SALES DATASOURCES: Superstore Datasource (Samples), Superstore Datasource (default), Databricks-Superstore",
+            "🔍 KEY FIELDS: Customer Name, Product Name, Sales, Profit, Region",
+            "💡 ANALYSIS TIPS: Use TOP filters for 'best' questions, combine results from all datasources",
+            "⚠️ IMPORTANT: For 'best sellers' or 'all sales' questions, you MUST query multiple datasources"
+        ])
+    elif question_type == "discovery":
+        guidance.extend([
+            "🔍 DISCOVERY MODE: This question is about exploring available data",
+            "📊 START WITH: list-datasources to see what's available",
+            "🔍 THEN EXPLORE: list-fields to understand data structure",
+            "💡 STRATEGY: Start broad, then narrow down based on findings"
+        ])
+    else:
+        guidance.extend([
+            "🤔 GENERAL ANALYSIS: This question requires general data exploration",
+            "📊 APPROACH: Start by discovering available datasources",
+            "🔍 STRATEGY: Explore data structure, then choose appropriate analysis",
+            "💡 TIP: Look for datasources that match the question context"
+        ])
+    
+    # Add learned insights
+    if best_approach.get("strategy") != "explore":
+        guidance.append(f"🧠 LEARNED PATTERN: Previous successful approach was {best_approach.get('strategy')}")
+    
+    return "\n".join(guidance)
+
+# Intelligent system prompt that enables reasoning and adaptation
+TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to multiple datasources through MCP tools. You excel at reasoning, adapting, and learning from experience.
+
+CORE INTELLIGENCE:
+- **Dynamic Discovery**: Explore available datasources and understand their structure through reasoning
+- **Context-Aware Analysis**: Choose the best approach based on question context and business domain
+- **Adaptive Problem Solving**: Try different strategies when approaches fail, learn from errors
+- **Business Intelligence**: Understand pharmacy, sales, and other business domains naturally
+- **Continuous Learning**: Remember what works and adapt your approach over time
+
+REASONING APPROACH:
+When given a question, think step by step:
+1. **Analyze the Question**: What domain is this? What data would be most relevant?
+2. **Explore Available Data**: What datasources exist? What's their structure?
+3. **Choose Strategy**: What approach would be most effective for this specific question?
+4. **Execute and Learn**: Try your approach, learn from results, adapt if needed
+5. **Provide Insights**: Give specific, data-driven answers with actual numbers
+
+BUSINESS DOMAIN KNOWLEDGE:
+- **Pharmacy/Medical**: Medications, expiration dates, inventory, patients, prescriptions
+- **Sales/Business**: Customers, products, revenue, profit, regions, trends
+- **Data Patterns**: Look for relevant fields, understand relationships, optimize queries
+
+TOOL USAGE PHILOSOPHY:
+- **Discovery First**: Always start by understanding what data is available
+- **Context-Driven**: Choose tools based on what the question actually needs
+- **Adaptive Execution**: If one approach fails, try alternative strategies
+- **Learning-Oriented**: Remember successful patterns and avoid failed ones
+
+INTELLIGENT QUERY STRATEGIES:
+- **"All data" questions**: Identify all relevant datasources, query each appropriately
+- **"Best sellers", "top products", "all sales"**: Query ALL sales datasources and combine results
+- **Domain-specific questions**: Use business knowledge to choose the best datasource
+- **Comprehensive analysis**: When asked for "best" or "top" items, query multiple datasources
+- **Complex analysis**: Break down into steps, use multiple tools as needed
+- **Error recovery**: When something fails, try alternative approaches
 
 CRITICAL TOOL FORMATTING:
-- **query-datasource**: ALWAYS use this exact structure:
+- **query-datasource**: Use this structure:
   {
     "datasourceLuid": "datasource-id-here",
     "query": {
       "fields": [
-        {"fieldCaption": "Product Name"},  // DIMENSION - no function
-        {"fieldCaption": "Profit", "function": "SUM", "fieldAlias": "Total Profit"}  // MEASURE - with function
+        {"fieldCaption": "Dimension Field"},  // DIMENSION - no function
+        {"fieldCaption": "Measure Field", "function": "SUM", "fieldAlias": "Alias"}  // MEASURE - with function
       ],
       "filters": [{"field": {"fieldCaption": "Field Name"}, "filterType": "TOP", "howMany": 10}]
     }
@@ -62,37 +322,7 @@ CRITICAL TOOL FORMATTING:
 - **list-fields**: Use {"datasourceLuid": "datasource-id-here"}
 - **list-datasources**: Use {} (no arguments needed)
 
-QUERY OPTIMIZATION:
-- Use TOP filters for "top N" questions (top customers, products, etc.)
-- Use appropriate aggregations (SUM, COUNT, AVG) for metrics
-- Apply filters to reduce data volume
-- Group by relevant dimensions
-
-DIVERSE QUESTION HANDLING:
-- **Data Discovery**: "What data do I have?" → list-datasources
-- **Schema Questions**: "What fields are available?" → list-fields  
-- **Business Analytics**: "Top customers by sales" → query with TOP filter
-- **Comparisons**: "Compare regions" → query with GROUP BY
-- **Trends**: "Sales over time" → query with date functions
-- **What-if**: Use existing data to model scenarios
-- **Insights**: Look for patterns, outliers, and opportunities
-
-MULTI-DATASOURCE QUERIES:
-- **"All my sales data"** → Query ALL datasources with "sales" OR "superstore" in the name
-- **"All Superstore data"** → Query ALL datasources with "superstore" in the name (including "Databricks-Superstore")
-- **"Using all available data"** → Query multiple relevant datasources
-- **Cross-datasource analysis** → Query each datasource separately, then combine insights
-- **Comprehensive analysis** → Don't limit to just one datasource when the question asks for "all" data
-
-SUPERSTORE DATASOURCES:
-- There are MULTIPLE Superstore datasources available:
-  - "Superstore Datasource" (Samples project)
-  - "Superstore Datasource" (default project) 
-  - "Databricks-Superstore" (MCP Dashboard & Data project)
-- When asked about "all sales data" or "all superstore data", query ALL of these datasources
-- Combine results from all Superstore datasources for comprehensive analysis
-
-Always provide specific, data-driven answers with actual numbers and insights."""
+Always provide specific, data-driven answers with actual numbers and insights. Think, reason, adapt, and learn."""
 
 class MCPHttpClient:
     """HTTP-based MCP client similar to the e-bikes demo"""
@@ -321,11 +551,25 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
         # Bind tools to the model
         llm_with_tools = llm.bind_tools(langchain_tools)
         
-        # Create system message
+        # Get intelligent context and recommendations
+        question_type = _identify_question_type(query)
+        best_approach = learning_memory.get_best_approach(question_type)
+        context_info = _get_contextual_guidance(query, question_type, best_approach)
+        
+        # Create system message with intelligent context
         system_content = f"""{TABLEAU_SYSTEM_PROMPT}
 
+CONTEXTUAL GUIDANCE:
+{context_info}
+
 Available tools:
-{chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}"""
+{chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}
+
+LEARNING INSIGHTS:
+- Question type: {question_type}
+- Recommended approach: {best_approach.get('strategy', 'explore')}
+- Previous successes: {len(learning_memory.successful_patterns.get(question_type, []))}
+- Previous failures: {len(learning_memory.failed_patterns.get(question_type, []))}"""
         
         # Prepare conversation
         messages = [SystemMessage(content=system_content)]
@@ -385,24 +629,64 @@ Available tools:
                                 ))
                                 
                                 print(f"✅ {tool_name} completed successfully")
+                                
+                                # Learn from success
+                                question_type = _identify_question_type(query)
+                                approach = {
+                                    "tool": tool_name,
+                                    "datasource": tool_args.get("datasourceLuid", "unknown"),
+                                    "strategy": "direct_query"
+                                }
+                                learning_memory.learn_success(question_type, approach, {"summary": "success"})
+                                
                                 consecutive_failed_tools = 0  # Reset on success
                                 break
                         
                     except Exception as e:
                         print(f"❌ {tool_name} failed: {str(e)}")
-                        consecutive_failed_tools += 1
-                        error_result = {
-                            "tool": tool_name,
-                            "arguments": tool_args,
-                            "error": str(e)
-                        }
-                        all_tool_results.append(error_result)
                         
-                        # Add error to conversation
-                        messages.append(ToolMessage(
-                            content=f"Error: {str(e)}",
-                            tool_call_id=tool_call["id"]
-                        ))
+                        # Learn from the failure
+                        question_type = _identify_question_type(query)
+                        approach = {
+                            "tool": tool_name,
+                            "datasource": tool_args.get("datasourceLuid", "unknown"),
+                            "strategy": "direct_query"
+                        }
+                        learning_memory.learn_failure(question_type, approach, str(e))
+                        
+                        # Get intelligent recovery strategy
+                        recovery_strategy = learning_memory.get_error_recovery_strategy(str(e))
+                        print(f"🧠 Recovery strategy: {recovery_strategy}")
+                        
+                        # Try alternative approach based on error type
+                        alternative_result = await _try_alternative_approach(
+                            tool_name, tool_args, str(e), recovery_strategy, 
+                            mcp_client, langchain_tools, query
+                        )
+                        
+                        if alternative_result:
+                            print(f"✅ Alternative approach succeeded")
+                            all_tool_results.append(alternative_result)
+                            messages.append(ToolMessage(
+                                content=json.dumps(alternative_result["result"]),
+                                tool_call_id=tool_call["id"]
+                            ))
+                            consecutive_failed_tools = 0  # Reset on success
+                        else:
+                            consecutive_failed_tools += 1
+                            error_result = {
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "error": str(e),
+                                "recovery_attempted": True
+                            }
+                            all_tool_results.append(error_result)
+                            
+                            # Add error to conversation
+                            messages.append(ToolMessage(
+                                content=f"Error: {str(e)}. Tried alternative approach but failed.",
+                                tool_call_id=tool_call["id"]
+                            ))
             else:
                 # No tool calls, we're done
                 return {
