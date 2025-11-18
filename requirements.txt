@@ -1,6 +1,5 @@
 fastapi==0.115.12
 langchain-openai==0.3.19
-langchain-tableau==0.4.39
 langchain-core==0.3.63
 langsmith==0.3.44
 pydantic==2.11.5
