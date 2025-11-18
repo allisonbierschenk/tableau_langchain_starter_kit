@@ -38,7 +38,7 @@ function addMessage(html, type, messageId = null) {
     return messageDiv;
 }
 
-// --- Enhanced Progress Indicator ---
+// --- Enhanced Progress Indicator / Thinking Bubble ---
 function showTypingIndicator(show = true) {
     const existingIndicator = document.getElementById('typing-indicator');
     if (show && !existingIndicator) {
@@ -47,7 +47,7 @@ function showTypingIndicator(show = true) {
                 <div class="typing-dots">
                     <span></span><span></span><span></span>
                 </div>
-                <span class="typing-text">AI is analyzing your data...</span>
+                <span class="typing-text">Thinking...</span>
             </div>
         `;
         addMessage(indicatorHtml, 'bot', 'typing-indicator');
@@ -66,11 +66,11 @@ async function sendMessage() {
         return;
     }
 
-    console.log('📝 Message:', message);
+            console.log('Message:', message);
 
     // Prevent sending multiple messages simultaneously
     if (currentStream) {
-        addMessage("⏳ Please wait for the current response to complete.", "bot");
+        addMessage("Please wait for the current response to complete.", "bot");
         return;
     }
 
@@ -92,17 +92,17 @@ async function sendMessage() {
     let hasStartedResponse = false;
 
     try {
-        console.log('🔧 Creating AbortController');
+        console.log('Creating AbortController');
         const controller = new AbortController();
         currentStream = controller;
 
         // Always use MCP/Analyst Agent endpoint
-        console.log(`🚀 Using MCP/Analyst Agent for: "${message}"`);
+        console.log(`Using MCP/Analyst Agent for: "${message}"`);
 
-        showTypingIndicator();
-        console.log('📡 Calling handleMCPRequest');
+        // Don't show thinking bubble immediately - wait for "planning" step
+        console.log('Calling handleMCPRequest');
         fullResponse = await handleMCPRequest(message, controller, botMessageId);
-        console.log('✅ handleMCPRequest completed, response:', fullResponse);
+        console.log('handleMCPRequest completed, response:', fullResponse);
         hasStartedResponse = true;
 
         // Display final response if we have one
@@ -113,22 +113,22 @@ async function sendMessage() {
         } else if (!hasStartedResponse) {
             // If nothing worked, show error
             showTypingIndicator(false);
-            addMessage("❌ I apologize, but I encountered an issue analyzing your request. Please try rephrasing your question or asking something more specific about your data.", 'bot', botMessageId);
+            addMessage("I apologize, but I encountered an issue analyzing your request. Please try rephrasing your question or asking something more specific about your data.", 'bot', botMessageId);
         }
 
     } catch (error) {
-        console.error('❌ Error in sendMessage:', error);
+        console.error('Error in sendMessage:', error);
         showTypingIndicator(false);
         
         // Enhanced error handling
-        let errorMessage = "❌ I encountered an error while processing your request.";
+        let errorMessage = "I encountered an error while processing your request.";
         
         if (error.name === 'AbortError') {
-            errorMessage = "⏹️ Request was cancelled.";
+            errorMessage = "Request was cancelled.";
         } else if (error.message.includes('Failed to fetch')) {
-            errorMessage = "🌐 Connection error. Please check your internet connection and try again.";
+            errorMessage = "Connection error. Please check your internet connection and try again.";
         } else if (error.message.includes('HTTP')) {
-            errorMessage = `🔧 Server error: ${error.message}. Please try again later.`;
+            errorMessage = `Server error: ${error.message}. Please try again later.`;
         }
         
         addMessage(errorMessage, 'bot', botMessageId);
@@ -143,8 +143,8 @@ async function sendMessage() {
 
 // --- Handle MCP Request ---
 async function handleMCPRequest(message, controller, botMessageId) {
-    console.log('📡 handleMCPRequest called with message:', message);
-    console.log('🌐 API_BASE_URL:', API_BASE_URL);
+    console.log('handleMCPRequest called with message:', message);
+    console.log('API_BASE_URL:', API_BASE_URL);
     
     try {
         const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
@@ -158,8 +158,8 @@ async function handleMCPRequest(message, controller, botMessageId) {
             signal: controller.signal
         });
 
-        console.log('📡 Response status:', response.status);
-        console.log('📡 Response headers:', response.headers);
+        console.log('Response status:', response.status);
+        console.log('Response headers:', response.headers);
 
         if (!response.ok) {
             let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
@@ -172,19 +172,19 @@ async function handleMCPRequest(message, controller, botMessageId) {
             throw new Error(errorMessage);
         }
 
-        console.log('📡 Calling handleMCPStreamingResponse');
+        console.log('Calling handleMCPStreamingResponse');
         const result = await handleMCPStreamingResponse(response, botMessageId, message);
-        console.log('✅ handleMCPStreamingResponse completed, result:', result);
+        console.log('handleMCPStreamingResponse completed, result:', result);
         return result;
     } catch (error) {
-        console.error('❌ Error in handleMCPRequest:', error);
+        console.error('Error in handleMCPRequest:', error);
         throw error;
     }
 }
 
 // --- Enhanced MCP Streaming Response Handler ---
 async function handleMCPStreamingResponse(response, botMessageId, originalMessage = '') {
-    console.log('📡 handleMCPStreamingResponse called');
+    console.log('handleMCPStreamingResponse called');
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -193,40 +193,46 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
     let isComplete = false;
     let timeoutId = null;
 
-    // Remove typing indicator when we start receiving real data
-    showTypingIndicator(false);
-    
-    // Create progress indicator for MCP
+    // Keep thinking indicator visible - it will stay until we get actual results
+    // Create progress indicator for MCP (shows detailed progress alongside thinking bubble)
     const progressId = 'mcp-progress-' + Date.now();
-    progressDiv = addMessage('<div class="mcp-progress">🔄 <em>Initializing advanced analysis...</em></div>', 'bot', progressId);
+    progressDiv = addMessage('<div class="mcp-progress"><em>Initializing advanced analysis...</em></div>', 'bot', progressId);
     
+    // Create bot message div but hide it until we have content
     let botMessageDiv = addMessage('', 'bot', botMessageId);
+    if (botMessageDiv) {
+        botMessageDiv.style.display = 'none';
+    }
 
     try {
-        console.log('📡 Starting to read stream');
+        console.log('Starting to read stream');
+        
+        // Keep thinking indicator visible until we get actual results
+        // Don't remove it immediately - let progress events handle the transition
         
         // Set a timeout to prevent infinite analyzing state
         timeoutId = setTimeout(() => {
             if (!isComplete) {
-                console.warn('⚠️ Stream timeout - forcing completion');
+                console.warn('Stream timeout - forcing completion');
+                showTypingIndicator(false);
                 if (progressDiv) {
                     progressDiv.remove();
                     progressDiv = null;
                 }
                 isComplete = true;
             }
-        }, 60000); // 60 second timeout
+        }, 120000); // 120 second timeout
         
         while (true && !isComplete) {
             const { done, value } = await reader.read();
             if (done) {
-                console.log('📡 Stream done');
+                console.log('Stream done');
                 clearTimeout(timeoutId);
                 break;
             }
 
             buffer += decoder.decode(value, { stream: true });
-            console.log('📡 Buffer received:', buffer);
+            console.log('Buffer received:', buffer);
             const events = buffer.split('\n\n');
             buffer = events.pop() || ''; // Keep incomplete event in buffer
 
@@ -254,12 +260,18 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                         }
                     }
 
-                    console.log('📡 Event type:', eventType, 'Event data:', eventData);
+                    console.log('Event type:', eventType, 'Event data:', eventData);
 
                     if (eventType && eventData) {
                         if (eventType === 'progress' && progressDiv) {
                             handleMCPProgressEvent(eventData, progressDiv);
                         } else if (eventType === 'result') {
+                            // Clear timeout when we get results
+                            if (timeoutId) {
+                                clearTimeout(timeoutId);
+                                timeoutId = null;
+                            }
+                            
                             // Handle both old format and new format
                             if (eventData.data && eventData.data.response) {
                                 fullResponse = eventData.data.response;
@@ -274,13 +286,16 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                                     window.lastToolResults = eventData.tool_results;
                                 }
                             }
-                            console.log('📡 Result event, fullResponse:', fullResponse);
-                            console.log('📊 Tool results for datasource extraction:', window.lastToolResults);
+                            console.log('Result event, fullResponse:', fullResponse);
+                            console.log('Tool results for datasource extraction:', window.lastToolResults);
                             if (fullResponse) {
                                 // Enhanced formatting for MCP results with datasource info
                                 botMessageDiv.innerHTML = formatMCPResponse(fullResponse, window.lastToolResults);
+                                // Show the message div now that we have content
+                                botMessageDiv.style.display = '';
                             }
-                            // Remove progress indicator immediately when we get results
+                            // Remove progress indicator and thinking indicator when we get results
+                            showTypingIndicator(false);
                             if (progressDiv) {
                                 progressDiv.remove();
                                 progressDiv = null;
@@ -288,7 +303,7 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             
                             // Auto-display dashboard image if user requested it
                             if (originalMessage && shouldDisplayDashboardImage(originalMessage)) {
-                                console.log('🖼️ Auto-displaying dashboard image based on user request');
+                                console.log('Auto-displaying dashboard image based on user request');
                                 setTimeout(() => displayDashboardImage(), 500);
                             }
                             // Mark as complete but continue to wait for done event
@@ -296,7 +311,12 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                         } else if (eventType === 'error') {
                             throw new Error(eventData.error || 'Unknown MCP stream error');
                         } else if (eventType === 'done') {
-                            console.log('📡 Done event received');
+                            console.log('Done event received');
+                            // Clear timeout when done
+                            if (timeoutId) {
+                                clearTimeout(timeoutId);
+                                timeoutId = null;
+                            }
                             isComplete = true;
                             break;
                         }
@@ -313,7 +333,7 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
             throw new Error('No response received from MCP analysis');
         }
 
-        console.log('📡 Returning fullResponse:', fullResponse);
+        console.log('Returning fullResponse:', fullResponse);
         return fullResponse;
 
     } finally {
@@ -322,7 +342,8 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
             clearTimeout(timeoutId);
         }
         
-        // Ensure progress indicator is removed
+        // Ensure progress indicator and thinking indicator are removed
+        showTypingIndicator(false);
         if (progressDiv) {
             progressDiv.remove();
         }
@@ -332,63 +353,48 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
 // --- Handle MCP Progress Events ---
 function handleMCPProgressEvent(eventData, progressDiv) {
     if (eventData.message) {
-        const icon = getMCPProgressIcon(eventData.step);
         let userFriendlyMessage = eventData.message;
         
         // Convert technical messages to user-friendly ones
         if (eventData.step === 'discover-tools') {
-            userFriendlyMessage = "🔍 Discovering available data analysis tools...";
+            userFriendlyMessage = "Discovering available data analysis tools...";
         } else if (eventData.step === 'tools-discovered') {
-            userFriendlyMessage = `🛠️ Found ${eventData.tools ? eventData.tools.length : 0} analysis tools ready to use`;
+            userFriendlyMessage = `Found ${eventData.tools ? eventData.tools.length : 0} analysis tools ready to use`;
         } else if (eventData.step === 'iteration') {
-            userFriendlyMessage = `🧠 Thinking through your question (Step ${eventData.iteration || 1})...`;
+            userFriendlyMessage = `Thinking through your question (Step ${eventData.iteration || 1})...`;
         } else if (eventData.step === 'executing-tools') {
-            userFriendlyMessage = `⚙️ Analyzing your data (${eventData.tool_count || 1} analysis step${eventData.tool_count > 1 ? 's' : ''})...`;
+            userFriendlyMessage = `Analyzing your data (${eventData.tool_count || 1} analysis step${eventData.tool_count > 1 ? 's' : ''})...`;
         } else if (eventData.step === 'tool-executing') {
             if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "📊 Exploring available data sources...";
+                userFriendlyMessage = "Exploring available data sources...";
             } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "🔍 Examining data structure and available fields...";
+                userFriendlyMessage = "Examining data structure and available fields...";
             } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "📈 Querying data to find insights...";
+                userFriendlyMessage = "Querying data to find insights...";
             } else {
-                userFriendlyMessage = `🔧 ${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}...`;
+                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}...`;
             }
         } else if (eventData.step === 'tool-completed') {
             if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "✅ Data sources identified";
+                userFriendlyMessage = "Data sources identified";
             } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "✅ Data structure analyzed";
+                userFriendlyMessage = "Data structure analyzed";
             } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "✅ Data query completed";
+                userFriendlyMessage = "Data query completed";
             } else {
-                userFriendlyMessage = `✅ ${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} completed`;
+                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} completed`;
             }
         } else if (eventData.step === 'final-response') {
-            userFriendlyMessage = "📝 Preparing your personalized insights...";
+            userFriendlyMessage = "Preparing your personalized insights...";
         }
         
-        progressDiv.innerHTML = `<div class="mcp-progress" data-step="${eventData.step || 'default'}">${icon} <em>${userFriendlyMessage}</em></div>`;
+        progressDiv.innerHTML = `<div class="mcp-progress" data-step="${eventData.step || 'default'}"><em>${userFriendlyMessage}</em></div>`;
     }
 }
 
-// --- Get Progress Icon for MCP Steps ---
+// --- Get Progress Icon for MCP Steps --- (removed - no longer using icons)
 function getMCPProgressIcon(step) {
-    const icons = {
-        'init': '🔌',
-        'tools': '🔍',
-        'tools-found': '🛠️',
-        'analysis-start': '🚀',
-        'iteration-start': '🔄',
-        'tools-executing': '⚙️',
-        'tool-executing': '🔧',
-        'tool-completed': '✅',
-        'tool-error': '⚠️',
-        'iteration-complete': '✨',
-        'complete': '🎉',
-        'max-iterations': '⏰'
-    };
-    return icons[step] || '📋';
+    return '';
 }
 
 // --- Enhanced Response Formatting for MCP Results ---
@@ -405,10 +411,10 @@ function formatMCPResponse(text, toolResults = null) {
     // Add datasource information if available
     if (toolResults && toolResults.length > 0) {
         const datasources = extractDatasourceNames(toolResults);
-        console.log('📊 Datasources:', datasources);
-        console.log('📊 Tool Results:', toolResults);
+        console.log('Datasources:', datasources);
+        console.log('Tool Results:', toolResults);
         if (datasources.length > 0) {
-            formatted += '<br><br><div class="datasource-info">📊 <strong>Data Sources Used:</strong> ' + datasources.join(', ') + '</div>';
+            formatted += '<br><br><div class="datasource-info"><strong>Data Sources Used:</strong> ' + datasources.join(', ') + '</div>';
         }
     }
 
@@ -566,7 +572,7 @@ function setupKeyboardShortcuts() {
         if (event.key === 'Escape' && currentStream) {
             currentStream.abort();
             currentStream = null;
-            addMessage("⏹️ <em>Request cancelled by user</em>", "bot");
+            addMessage("<em>Request cancelled by user</em>", "bot");
         }
     });
 }
@@ -579,7 +585,7 @@ function shouldDisplayDashboardImage(message) {
 }
 
 function displayDashboardImage() {
-    console.log('🖼️ Attempting to display dashboard image');
+    console.log('Attempting to display dashboard image');
     
     // Look for image data in the current conversation
     const chatBox = document.getElementById('chatBox');
@@ -588,7 +594,7 @@ function displayDashboardImage() {
     // Check if we already have an image displayed
     const existingImage = chatBox.querySelector('.dashboard-image');
     if (existingImage) {
-        console.log('🖼️ Dashboard image already displayed');
+        console.log('Dashboard image already displayed');
         return;
     }
     
@@ -610,7 +616,7 @@ function displayDashboardImage() {
         imageDiv.innerHTML = `
             <div class="image-container">
                 <div class="image-placeholder">
-                    <div class="image-icon">🖼️</div>
+                    <div class="image-icon"></div>
                     <div class="image-text">Dashboard Image Retrieved</div>
                     <div class="image-note">The dashboard visualization has been successfully retrieved from your Tableau data.</div>
                 </div>
@@ -620,7 +626,7 @@ function displayDashboardImage() {
         // Add to the last bot message
         lastBotMessage.appendChild(imageDiv);
         
-        console.log('🖼️ Dashboard image placeholder displayed');
+        console.log('Dashboard image placeholder displayed');
     }
 }
 
@@ -644,8 +650,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     const sendBtn = document.getElementById('sendBtn');
 
     // Debug: Show which API URL is being used
-    console.log('🌐 Using API URL:', API_BASE_URL);
-    console.log('🌐 Current hostname:', window.location.hostname);
+    console.log('Using API URL:', API_BASE_URL);
+    console.log('Current hostname:', window.location.hostname);
 
     // Setup event listeners
     if (messageInput) messageInput.addEventListener('keypress', handleEnter);
@@ -661,10 +667,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Check server health
     const serverHealthy = await checkServerHealth();
     if (!serverHealthy) {
-        addMessage(`⚠️ <strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
+        addMessage(`<strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
         return;
     }
 
     // Show ready message
-    addMessage("✅ <strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
+    addMessage("<strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
 });

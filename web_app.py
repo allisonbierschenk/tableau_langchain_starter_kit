@@ -130,9 +130,15 @@ async def mcp_chat_stream_endpoint(request: ChatRequest):
             yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
             
         except Exception as e:
-            print(f"❌ Stream error: {str(e)}")
-            yield f"event: error\n"
-            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+            error_msg = str(e)
+            print(f"❌ Stream error: {error_msg}")
+            
+            # Send error as a result so the UI can display it properly
+            yield f"event: result\n"
+            yield f"data: {json.dumps({'response': f'Error: {error_msg}', 'tool_results': [], 'iterations': 0, 'error': True})}\n\n"
+            
+            yield f"event: done\n"
+            yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
     
     return StreamingResponse(
         generate_stream(),

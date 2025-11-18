@@ -226,22 +226,36 @@ header h1 {
 .typing-indicator {
     display: flex;
     align-items: center;
-    gap: 10px;
-    color: #6c757d;
+    gap: 12px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+    border: 2px solid #90caf9;
+    border-radius: 18px;
+    color: #1565c0;
     font-style: italic;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
+    animation: thinkingPulse 2s ease-in-out infinite;
+    margin: 8px 0;
+}
+
+.typing-indicator .typing-text {
+    font-weight: 500;
+    font-size: 14px;
 }
 
 .typing-dots {
     display: flex;
-    gap: 3px;
+    gap: 4px;
+    align-items: center;
 }
 
 .typing-dots span {
-    width: 6px;
-    height: 6px;
-    background: #6c757d;
+    width: 8px;
+    height: 8px;
+    background: #2196f3;
     border-radius: 50%;
     animation: typingDot 1.4s infinite ease-in-out;
+    box-shadow: 0 2px 4px rgba(33, 150, 243, 0.3);
 }
 
 .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
@@ -253,8 +267,19 @@ header h1 {
         opacity: 0.5;
     }
     40% {
-        transform: scale(1);
+        transform: scale(1.2);
         opacity: 1;
+    }
+}
+
+@keyframes thinkingPulse {
+    0%, 100% {
+        box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
+        transform: translateY(0);
+    }
+    50% {
+        box-shadow: 0 4px 12px rgba(33, 150, 243, 0.25);
+        transform: translateY(-2px);
     }
 }
 

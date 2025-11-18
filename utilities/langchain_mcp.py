@@ -115,7 +115,7 @@ async def _try_alternative_approach(tool_name: str, tool_args: dict, error: str,
         if recovery_strategy["strategy"] == "field_discovery":
             # Try listing fields first to understand structure
             if "datasourceLuid" in tool_args:
-                print("🔍 Trying field discovery approach...")
+                print("Trying field discovery approach...")
                 for tool in langchain_tools:
                     if tool.name == "list-fields":
                         result = await tool._arun(datasourceLuid=tool_args["datasourceLuid"])
@@ -127,7 +127,7 @@ async def _try_alternative_approach(tool_name: str, tool_args: dict, error: str,
         
         elif recovery_strategy["strategy"] == "argument_fix":
             # Try simplifying arguments
-            print("🔧 Trying simplified arguments...")
+            print("Trying simplified arguments...")
             simplified_args = _simplify_arguments(tool_args)
             for tool in langchain_tools:
                 if tool.name == tool_name:
@@ -140,7 +140,7 @@ async def _try_alternative_approach(tool_name: str, tool_args: dict, error: str,
         
         elif recovery_strategy["strategy"] == "datasource_switch":
             # Try alternative datasource
-            print("🔄 Trying alternative datasource...")
+            print("Trying alternative datasource...")
             alternative_datasource = _find_alternative_datasource(tool_args, query)
             if alternative_datasource:
                 modified_args = tool_args.copy()
@@ -156,11 +156,11 @@ async def _try_alternative_approach(tool_name: str, tool_args: dict, error: str,
         
         elif recovery_strategy["strategy"] == "general_recovery":
             # Try a completely different approach
-            print("🔄 Trying general recovery approach...")
+            print("Trying general recovery approach...")
             return await _try_general_recovery(query, mcp_client, langchain_tools)
     
     except Exception as recovery_error:
-        print(f"❌ Recovery attempt failed: {str(recovery_error)}")
+        print(f"Recovery attempt failed: {str(recovery_error)}")
     
     return None
 
@@ -221,108 +221,60 @@ async def _try_general_recovery(query: str, mcp_client, langchain_tools):
                     "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
                 }
     except Exception as e:
-        print(f"❌ General recovery failed: {str(e)}")
+        print(f"General recovery failed: {str(e)}")
     
     return None
 
 def _get_contextual_guidance(query: str, question_type: str, best_approach: dict) -> str:
-    """Provide contextual guidance based on question type and learned patterns"""
-    
-    guidance = []
-    
-    if question_type == "pharmacy":
-        guidance.extend([
-            "🏥 PHARMACY DOMAIN: This question involves medication/pharmacy data",
-            "📊 RECOMMENDED DATASOURCES: Look for 'Pharmacist Inventory' or 'pharmacy' datasources",
-            "🔍 KEY FIELDS: Drug Name, Expiration Date, Daily Quantity Remaining, Location",
-            "💡 SPECIAL FEATURES: Use 'Expiration Buckets' field for expiration queries"
-        ])
-    elif question_type == "sales":
-        guidance.extend([
-            "💰 SALES DOMAIN: This question involves business/sales data",
-            "📊 CRITICAL: Query ALL sales datasources for comprehensive analysis",
-            "🔍 SALES DATASOURCES: Superstore Datasource (Samples), Superstore Datasource (default), Databricks-Superstore",
-            "🔍 KEY FIELDS: Customer Name, Product Name, Sales, Profit, Region",
-            "💡 ANALYSIS TIPS: Use TOP filters for 'best' questions, combine results from all datasources",
-            "⚠️ IMPORTANT: For 'best sellers' or 'all sales' questions, you MUST query multiple datasources"
-        ])
-    elif question_type == "discovery":
-        guidance.extend([
-            "🔍 DISCOVERY MODE: This question is about exploring available data",
-            "📊 START WITH: list-datasources to see what's available",
-            "🔍 THEN EXPLORE: list-fields to understand data structure",
-            "💡 STRATEGY: Start broad, then narrow down based on findings"
-        ])
-    else:
-        guidance.extend([
-            "🤔 GENERAL ANALYSIS: This question requires general data exploration",
-            "📊 APPROACH: Start by discovering available datasources",
-            "🔍 STRATEGY: Explore data structure, then choose appropriate analysis",
-            "💡 TIP: Look for datasources that match the question context"
-        ])
-    
-    # Add learned insights
-    if best_approach.get("strategy") != "explore":
-        guidance.append(f"🧠 LEARNED PATTERN: Previous successful approach was {best_approach.get('strategy')}")
-    
-    return "\n".join(guidance)
+    """Provide minimal contextual guidance - let the agent be flexible"""
+    # Keep it simple - don't over-prescribe behavior
+    return ""
 
-# Intelligent system prompt that enables reasoning and adaptation
-TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to multiple datasources through MCP tools. You excel at reasoning, adapting, and learning from experience.
+# Intelligent system prompt with structured tool usage patterns
+TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to Tableau data through MCP tools. Help users understand their data by using tools strategically to get information and presenting it with insights.
 
-CORE INTELLIGENCE:
-- **Dynamic Discovery**: Explore available datasources and understand their structure through reasoning
-- **Context-Aware Analysis**: Choose the best approach based on question context and business domain
-- **Adaptive Problem Solving**: Try different strategies when approaches fail, learn from errors
-- **Business Intelligence**: Understand pharmacy, sales, and other business domains naturally
-- **Continuous Learning**: Remember what works and adapt your approach over time
+TOOL USAGE PATTERNS:
 
-REASONING APPROACH:
-When given a question, think step by step:
-1. **Analyze the Question**: What domain is this? What data would be most relevant?
-2. **Explore Available Data**: What datasources exist? What's their structure?
-3. **Choose Strategy**: What approach would be most effective for this specific question?
-4. **Execute and Learn**: Try your approach, learn from results, adapt if needed
-5. **Provide Insights**: Give specific, data-driven answers with actual numbers
+For Pulse Metrics Questions (e.g., "list my pulse metrics", "top metrics", "concerning metrics"):
+1. First: Use `list-all-pulse-metric-definitions` to discover available metrics
+2. Then: Get metric IDs using `list-pulse-metrics-from-metric-definition-id` (use the definition IDs from step 1)
+3. Finally: Use `generate-pulse-metric-value-insight-bundle` with:
+   - `bundleRequest`: {"pulseMetricIds": ["metric-id-1", "metric-id-2", ...]} (use the metric IDs from step 2)
+   - `bundleType`: "FULL" (to get complete insights)
+4. Always: Extract and present the actual metric values, trends, and insights from the results
+   - Don't just list metric definitions - get the real numbers and insights!
 
-BUSINESS DOMAIN KNOWLEDGE:
-- **Pharmacy/Medical**: Medications, expiration dates, inventory, patients, prescriptions
-- **Sales/Business**: Customers, products, revenue, profit, regions, trends
-- **Data Patterns**: Look for relevant fields, understand relationships, optimize queries
+For Data Source Questions (e.g., "what data sources do I have", "fields in a datasource"):
+1. Use `list-datasources` to find available data sources
+2. Use `get-datasource-metadata` to get field information
+3. Use `query-datasource` to run queries and get actual data
 
-TOOL USAGE PHILOSOPHY:
-- **Discovery First**: Always start by understanding what data is available
-- **Context-Driven**: Choose tools based on what the question actually needs
-- **Adaptive Execution**: If one approach fails, try alternative strategies
-- **Learning-Oriented**: Remember successful patterns and avoid failed ones
+For Workbook/View Questions (e.g., "show me workbooks", "get view data"):
+1. Use `list-workbooks` to find workbooks
+2. Use `get-workbook` for workbook details
+3. Use `list-views` to find views
+4. Use `get-view-data` for CSV data or `get-view-image` for screenshots
 
-INTELLIGENT QUERY STRATEGIES:
-- **"All data" questions**: Identify all relevant datasources, query each appropriately
-- **"Best sellers", "top products", "all sales"**: Query ALL sales datasources and combine results
-- **Domain-specific questions**: Use business knowledge to choose the best datasource
-- **Comprehensive analysis**: When asked for "best" or "top" items, query multiple datasources
-- **Complex analysis**: Break down into steps, use multiple tools as needed
-- **Error recovery**: When something fails, try alternative approaches
+For General Content Search:
+- Use `search-content` to search across workbooks, views, datasources, etc.
 
-CRITICAL TOOL FORMATTING:
-- **query-datasource**: Use this structure:
-  {
-    "datasourceLuid": "datasource-id-here",
-    "query": {
-      "fields": [
-        {"fieldCaption": "Dimension Field"},  // DIMENSION - no function
-        {"fieldCaption": "Measure Field", "function": "SUM", "fieldAlias": "Alias"}  // MEASURE - with function
-      ],
-      "filters": [{"field": {"fieldCaption": "Field Name"}, "filterType": "TOP", "howMany": 10}]
-    }
-  }
-- **Field Types**: 
-  - DIMENSIONS (text, date): Use without functions: {"fieldCaption": "Product Name"}
-  - MEASURES (numbers): Use with functions: {"fieldCaption": "Profit", "function": "SUM"}
-- **list-fields**: Use {"datasourceLuid": "datasource-id-here"}
-- **list-datasources**: Use {} (no arguments needed)
+CRITICAL RULES:
+- When users ask about "metrics" or "insights", you MUST use `generate-pulse-metric-value-insight-bundle` to get actual insights
+- Never stop at just listing metric definitions - always get the actual values and insights
+- Always ground your responses in the actual data you collect from the Tableau MCP server
+- Always include insights - help users understand what the data means, what trends you see, and why it matters
+- Present specific numbers, values, and business insights, not just tool outputs
 
-Always provide specific, data-driven answers with actual numbers and insights. Think, reason, adapt, and learn."""
+WHEN YOU'RE NOT SURE WHAT TO DO:
+- If a query is ambiguous, use `search-content` to explore what's available, then ask clarifying questions
+- If you need metric IDs but only have names, use `list-all-pulse-metric-definitions` to find matching IDs
+- If a tool fails, try alternative tools or approaches (e.g., if `list-pulse-metrics-from-metric-ids` fails, try `generate-pulse-metric-value-insight-bundle`)
+- If you're missing required parameters, use discovery tools first (e.g., `list-datasources` before `query-datasource`)
+- When in doubt, start with broad discovery tools (`list-all-pulse-metric-definitions`, `list-datasources`, `list-workbooks`) to understand what's available
+- If you can't determine the user's intent, ask a clarifying question while also showing what options are available
+- Always try to be helpful - even if you're uncertain, make your best attempt using available tools and explain what you found
+
+Use your judgment to determine the best tool sequence, but follow these patterns to ensure you get complete, insightful answers."""
 
 class MCPHttpClient:
     """HTTP-based MCP client similar to the e-bikes demo"""
@@ -351,6 +303,9 @@ class MCPHttpClient:
                     data_line = lines[i + 1][6:]  # Remove 'data: ' prefix
                     try:
                         message = json.loads(data_line)
+                        # Check for errors first
+                        if message.get("id") == 1 and "error" in message:
+                            return message
                         # Look for the actual result (not notifications)
                         if message.get("id") == 1 and "result" in message:
                             return message
@@ -359,8 +314,18 @@ class MCPHttpClient:
         
         # If no proper result found, try parsing as direct JSON
         try:
-            return json.loads(response_text)
+            parsed = json.loads(response_text)
+            return parsed
         except json.JSONDecodeError:
+            # Try to extract error from SSE format
+            for line in lines:
+                if line.startswith('data: '):
+                    try:
+                        data = json.loads(line[6:])
+                        if "error" in data:
+                            return data
+                    except:
+                        pass
             raise Exception(f"Could not parse MCP response: {response_text[:200]}...")
     
     async def list_tools(self):
@@ -416,7 +381,12 @@ class MCPHttpClient:
         result = self._parse_sse_response(response.text)
         
         if "error" in result:
-            raise Exception(f"MCP Tool Error: {result['error']}")
+            error_info = result["error"]
+            error_message = error_info.get("message", str(error_info))
+            error_code = error_info.get("code", "unknown")
+            # Extract full error details
+            full_error = f"MCP Tool Error ({error_code}): {error_message}"
+            raise Exception(full_error)
             
         return result["result"]["content"]
 
@@ -442,6 +412,77 @@ class MCPTool(BaseTool):
         """Sync wrapper - not implemented"""
         raise NotImplementedError("Use async version")
     
+    def _format_insight_bundle(self, bundle_data: dict) -> str:
+        """Extract and format insights from a pulse metric insight bundle"""
+        try:
+            result = bundle_data.get("bundle_response", {}).get("result", {})
+            insight_groups = result.get("insight_groups", [])
+            
+            if not insight_groups:
+                return f"SUCCESS: {self.tool_name} returned data but no insights found:\n{json.dumps(bundle_data, indent=2)}"
+            
+            formatted_insights = []
+            for group in insight_groups:
+                insights = group.get("insights", [])
+                for insight in insights:
+                    insight_result = insight.get("result", {})
+                    facts = insight_result.get("facts", {})
+                    markup = insight_result.get("markup", "")
+                    question = insight_result.get("question", "")
+                    insight_type = insight.get("insight_type", "")
+                    
+                    # Extract key values
+                    target_value = facts.get("target_period_value", {})
+                    comparison_value = facts.get("comparison_period_value", {})
+                    difference = facts.get("difference", {})
+                    target_period = facts.get("target_time_period", {})
+                    comparison_period = facts.get("comparison_time_period", {})
+                    
+                    # Format the insight
+                    insight_text = f"INSIGHT ({insight_type}):\n"
+                    if question:
+                        insight_text += f"Question: {question}\n"
+                    if markup:
+                        insight_text += f"Summary: {markup}\n"
+                    
+                    # Add actual values
+                    if target_period.get("label"):
+                        insight_text += f"Current Period ({target_period.get('label')}): "
+                        if isinstance(target_value, dict) and not target_value.get("is_nan"):
+                            insight_text += f"{target_value.get('formatted', target_value.get('raw', 'N/A'))}\n"
+                        else:
+                            insight_text += "No data available\n"
+                    
+                    if comparison_period.get("label"):
+                        insight_text += f"Comparison Period ({comparison_period.get('label')}): "
+                        if isinstance(comparison_value, dict) and not comparison_value.get("is_nan"):
+                            insight_text += f"{comparison_value.get('formatted', comparison_value.get('raw', 'N/A'))}\n"
+                        else:
+                            insight_text += "No data available\n"
+                    
+                    # Add difference if available
+                    if isinstance(difference, dict):
+                        abs_diff = difference.get("absolute", {})
+                        rel_diff = difference.get("relative", {})
+                        direction = difference.get("direction", "")
+                        
+                        if not abs_diff.get("is_nan") and abs_diff.get("raw") is not None:
+                            insight_text += f"Absolute Change: {abs_diff.get('formatted', abs_diff.get('raw'))}\n"
+                        if not rel_diff.get("is_nan") and rel_diff.get("raw") is not None:
+                            insight_text += f"Relative Change: {rel_diff.get('formatted', rel_diff.get('raw'))}\n"
+                        if direction:
+                            insight_text += f"Direction: {direction}\n"
+                    
+                    formatted_insights.append(insight_text)
+            
+            if formatted_insights:
+                return f"SUCCESS: {self.tool_name} generated {len(formatted_insights)} insight(s):\n\n" + "\n---\n\n".join(formatted_insights)
+            else:
+                return f"SUCCESS: {self.tool_name} returned data:\n{json.dumps(bundle_data, indent=2)}"
+        except Exception as e:
+            # If formatting fails, return the raw data
+            return f"SUCCESS: {self.tool_name} returned data:\n{json.dumps(bundle_data, indent=2)}"
+    
     def _validate_and_fix_arguments(self, kwargs: dict) -> dict:
         """Validate and fix tool arguments to ensure correct format"""
         if self.tool_name == "query-datasource":
@@ -462,6 +503,33 @@ class MCPTool(BaseTool):
                     if "datasource" in key.lower() and isinstance(value, str):
                         kwargs["datasourceLuid"] = value
                         break
+        elif self.tool_name == "generate-pulse-metric-value-insight-bundle":
+            # Fix generate-pulse-metric-value-insight-bundle argument structure
+            # The tool expects: bundleRequest with pulseMetricIds array, and bundleType
+            if "bundleRequest" in kwargs:
+                # Already in correct format
+                pass
+            elif "pulseMetricIds" in kwargs or "pulseMetricId" in kwargs:
+                # Convert to bundleRequest format
+                metric_ids = kwargs.pop("pulseMetricIds", kwargs.pop("pulseMetricId", None))
+                if metric_ids:
+                    # Ensure it's a list
+                    if isinstance(metric_ids, str):
+                        metric_ids = [metric_ids]
+                    bundle_request = {"pulseMetricIds": metric_ids}
+                    kwargs["bundleRequest"] = bundle_request
+                # Set bundleType if not provided (default to "FULL")
+                if "bundleType" not in kwargs:
+                    kwargs["bundleType"] = "FULL"
+            elif "bundleType" in kwargs and "bundleRequest" not in kwargs:
+                # Invalid - bundleType without bundleRequest
+                # Try to construct from other args
+                if "metricId" in kwargs or "metricIds" in kwargs:
+                    metric_ids = kwargs.pop("metricId", kwargs.pop("metricIds", None))
+                    if metric_ids:
+                        if isinstance(metric_ids, str):
+                            metric_ids = [metric_ids]
+                        kwargs["bundleRequest"] = {"pulseMetricIds": metric_ids}
         return kwargs
 
     async def _arun(self, **kwargs) -> str:
@@ -473,13 +541,47 @@ class MCPTool(BaseTool):
         for attempt in range(max_retries + 1):
             try:
                 result = await self.mcp_client.call_tool(self.tool_name, kwargs)
-                return json.dumps(result, indent=2)
+                
+                # MCP returns content in format: [{"type": "text", "text": "..."}]
+                # Extract the actual data from the content structure
+                if isinstance(result, list) and len(result) > 0:
+                    # Check if it's the MCP content format
+                    if isinstance(result[0], dict) and "type" in result[0] and "text" in result[0]:
+                        # Extract the text content which might be JSON
+                        text_content = result[0]["text"]
+                        # Try to parse it as JSON to get the actual data
+                        try:
+                            parsed_data = json.loads(text_content)
+                            
+                            # Special handling for insight bundles - extract and format insights
+                            if self.tool_name == "generate-pulse-metric-value-insight-bundle" and isinstance(parsed_data, dict):
+                                return self._format_insight_bundle(parsed_data)
+                            
+                            # Return formatted JSON with clear indication of data
+                            if isinstance(parsed_data, list) and len(parsed_data) > 0:
+                                return f"SUCCESS: Found {len(parsed_data)} items in {self.tool_name}:\n{json.dumps(parsed_data, indent=2)}"
+                            elif isinstance(parsed_data, dict):
+                                return f"SUCCESS: {self.tool_name} returned data:\n{json.dumps(parsed_data, indent=2)}"
+                            else:
+                                return text_content
+                        except json.JSONDecodeError:
+                            # If it's not JSON, return the text as-is
+                            return text_content
+                    else:
+                        # It's already a list of data objects
+                        return json.dumps(result, indent=2)
+                elif isinstance(result, dict):
+                    return json.dumps(result, indent=2)
+                else:
+                    return json.dumps(result, indent=2)
             except Exception as e:
                 error_msg = str(e)
                 
                 # If it's an argument error and we haven't tried fixing yet, try to fix
-                if "Invalid arguments" in error_msg and attempt < max_retries:
-                    print(f"⚠️ Tool {self.tool_name} failed with argument error, attempting to fix...")
+                if ("Invalid arguments" in error_msg or "-32602" in error_msg) and attempt < max_retries:
+                    print(f"WARNING: Tool {self.tool_name} failed with argument error, attempting to fix...")
+                    print(f"   Error: {error_msg}")
+                    print(f"   Current kwargs: {kwargs}")
                     # Try different argument structures
                     if self.tool_name == "query-datasource":
                         # Try alternative structure
@@ -490,8 +592,24 @@ class MCPTool(BaseTool):
                             query = kwargs["query"]
                             if "datasourceLuid" in query:
                                 kwargs["datasourceLuid"] = query.pop("datasourceLuid")
+                    elif self.tool_name == "generate-pulse-metric-value-insight-bundle":
+                        # Try to fix bundle request format
+                        if "bundleRequest" not in kwargs:
+                            # Look for metric IDs in various formats
+                            metric_ids = None
+                            for key in ["pulseMetricIds", "pulseMetricId", "metricIds", "metricId", "metric_id"]:
+                                if key in kwargs:
+                                    metric_ids = kwargs.pop(key)
+                                    break
+                            if metric_ids:
+                                if isinstance(metric_ids, str):
+                                    metric_ids = [metric_ids]
+                                kwargs["bundleRequest"] = {"pulseMetricIds": metric_ids}
+                                if "bundleType" not in kwargs:
+                                    kwargs["bundleType"] = "FULL"
                     continue
                 else:
+                    # Return full error message so agent can see what went wrong
                     return f"Error executing {self.tool_name}: {error_msg}"
         
         return f"Error executing {self.tool_name}: Max retries exceeded"
@@ -526,7 +644,7 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
     async with MCPHttpClient(MCP_SERVER_URL) as mcp_client:
         # Get available tools
         tools_data = await mcp_client.list_tools()
-        print(f"📊 Found {len(tools_data)} MCP tools: {[t['name'] for t in tools_data]}")
+        print(f"Found {len(tools_data)} MCP tools: {[t['name'] for t in tools_data]}")
         
         # Create LangChain tools from MCP tools
         langchain_tools = []
@@ -551,25 +669,11 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
         # Bind tools to the model
         llm_with_tools = llm.bind_tools(langchain_tools)
         
-        # Get intelligent context and recommendations
-        question_type = _identify_question_type(query)
-        best_approach = learning_memory.get_best_approach(question_type)
-        context_info = _get_contextual_guidance(query, question_type, best_approach)
-        
-        # Create system message with intelligent context
+        # Create system message - keep it simple and flexible
         system_content = f"""{TABLEAU_SYSTEM_PROMPT}
 
-CONTEXTUAL GUIDANCE:
-{context_info}
-
 Available tools:
-{chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}
-
-LEARNING INSIGHTS:
-- Question type: {question_type}
-- Recommended approach: {best_approach.get('strategy', 'explore')}
-- Previous successes: {len(learning_memory.successful_patterns.get(question_type, []))}
-- Previous failures: {len(learning_memory.failed_patterns.get(question_type, []))}"""
+{chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}"""
         
         # Prepare conversation
         messages = [SystemMessage(content=system_content)]
@@ -592,7 +696,7 @@ LEARNING INSIGHTS:
         
         while iteration < MAX_MCP_ITERATIONS and consecutive_failed_tools < max_failed_attempts:
             iteration += 1
-            print(f"🔄 Iteration {iteration}/{MAX_MCP_ITERATIONS}")
+            print(f"Iteration {iteration}/{MAX_MCP_ITERATIONS}")
             
             # Get response from LLM with tools
             response = await llm_with_tools.ainvoke(messages)
@@ -615,16 +719,26 @@ LEARNING INSIGHTS:
                             if tool.name == tool_name:
                                 result = await tool._arun(**tool_args)
                                 
+                                # Parse result for storage
+                                try:
+                                    parsed_result = json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                                except:
+                                    parsed_result = result
+                                
                                 tool_result = {
                                     "tool": tool_name,
                                     "arguments": tool_args,
-                                    "result": json.loads(result) if result.startswith('[') or result.startswith('{') else result
+                                    "result": parsed_result
                                 }
                                 all_tool_results.append(tool_result)
                                 
-                                # Add tool result to conversation
+                                # The result from _arun is already formatted with "SUCCESS:" prefix if it has data
+                                # Just use it as-is - it's already clear
+                                formatted_result = result
+                                
+                                # Add tool result to conversation with formatted content
                                 messages.append(ToolMessage(
-                                    content=result,
+                                    content=formatted_result,
                                     tool_call_id=tool_call["id"]
                                 ))
                                 
