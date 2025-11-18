@@ -47,13 +47,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Serve static files - use absolute path for Railway
+import pathlib
+static_dir = pathlib.Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the main HTML page"""
-    return FileResponse("static/index.html")
+    index_path = static_dir / "index.html"
+    return FileResponse(str(index_path))
 
 @app.get("/health")
 async def health_check():
@@ -157,11 +160,13 @@ if __name__ == "__main__":
     print("📊 Using HTTP MCP client for hosted server")
     
     port = int(os.getenv("PORT", 8000))
+    # Disable reload in production (Railway sets RAILWAY_ENVIRONMENT)
+    reload = os.getenv("RAILWAY_ENVIRONMENT") is None
     
     uvicorn.run(
         "web_app:app",
         host="0.0.0.0",
         port=port,
-        reload=True,
+        reload=reload,
         log_level="info"
     )
