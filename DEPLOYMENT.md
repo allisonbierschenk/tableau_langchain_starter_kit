@@ -27,7 +27,7 @@ For the app to work in production, you need to set the following environment var
 2. **Deploy the Application:**
    - Push your changes to GitHub
    - Vercel will automatically deploy
-   - The app will be available at: `https://tableau-langchain-starter-kit.vercel.app`
+   - The app will be available at: `https://mcpagent.up.railway.app`
 
 3. **Test the Deployment:**
    - Visit the deployed URL

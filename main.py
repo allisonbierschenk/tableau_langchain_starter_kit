@@ -18,8 +18,8 @@ config = {
 }
 
 # MCP Configuration
-MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
-
+# MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
+MCP_SERVER_URL = "http://127.0.0.1:3927/tableau-mcp"
 async def mcp_chat(query: str):
     """Chat with the MCP server to get Tableau insights"""
     print(f"🚀 MCP Analysis Started")

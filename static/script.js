@@ -3,7 +3,7 @@
 // Configuration - Set your deployed backend URL here
 const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
     ? 'http://localhost:8000' 
-    : 'https://tableau-langchain-starter-kit.vercel.app');
+    : 'https://mcpagent.up.railway.app');
 
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context

@@ -65,7 +65,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://tableau-langchain-starter-kit.vercel.app",
+        "https://mcpagent.up.railway.app",
         "http://localhost:8000",
         "http://localhost:3000",
         "https://*.tableau.com",
