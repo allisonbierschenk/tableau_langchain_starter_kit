@@ -665,7 +665,7 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
             api_key=os.getenv("OPENAI_API_KEY"),
             temperature=0.1,
             max_tokens=1000,  # Reduce token usage
-            request_timeout=30  # Faster timeout
+            request_timeout=120  # Allow time for cold start / slow networks on deploy
         )
         
         # Bind tools to the model
