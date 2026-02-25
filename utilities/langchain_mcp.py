@@ -25,8 +25,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-# MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
-MCP_SERVER_URL = "http://127.0.0.1:3927/tableau-mcp"
+MCP_SERVER_URL = "https://tableau-mcp-bierschenk-2df05b623f7a.herokuapp.com/tableau-mcp"
+# MCP_SERVER_URL = "http://127.0.0.1:3927/tableau-mcp"
 MAX_MCP_ITERATIONS = 10  # Reduced for efficiency
 
 # Learning and Memory System
