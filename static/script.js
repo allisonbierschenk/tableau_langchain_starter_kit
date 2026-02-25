@@ -1,10 +1,10 @@
-// script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
+// script.js - With Tableau Extensions API for datasource detection when embedded in a dashboard
 
-// Configuration - Set your deployed backend URL here
 const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
     ? 'http://localhost:8000' 
     : 'https://mcpagent.up.railway.app');
 
+let datasourceReady = false;
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
 let sessionId = null; // Track session ID for better client-server communication
@@ -66,7 +66,13 @@ async function sendMessage() {
         return;
     }
 
-            console.log('Message:', message);
+    // When running as Tableau extension, require datasource init before sending
+    if (window._tableauExtensionMode && !datasourceReady) {
+        addMessage("⚠️ Please wait for the datasource to be initialized before asking questions.", "bot");
+        return;
+    }
+
+    console.log('Message:', message);
 
     // Prevent sending multiple messages simultaneously
     if (currentStream) {
@@ -644,33 +650,121 @@ async function checkServerHealth() {
     }
 }
 
-// --- Enhanced DOMContentLoaded Event Listener ---
-document.addEventListener('DOMContentLoaded', async function() {
+// --- Tableau Extension: Data Source Detection ---
+async function listAndSendDashboardDataSources() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    // Debug: Show which API URL is being used
+    if (messageInput) messageInput.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+    datasourceReady = false;
+
+    try {
+        addMessage("🔄 <em>Initializing Tableau Extensions API...</em>", "bot");
+
+        await tableau.extensions.initializeAsync();
+        const dashboard = tableau.extensions.dashboardContent.dashboard;
+        const worksheets = dashboard.worksheets;
+        const dataSourceMap = {};
+
+        addMessage("📊 <em>Scanning dashboard for data sources...</em>", "bot");
+
+        for (const worksheet of worksheets) {
+            try {
+                const dataSources = await worksheet.getDataSourcesAsync();
+                dataSources.forEach(ds => {
+                    if (!Object.values(dataSourceMap).includes(ds.id)) {
+                        dataSourceMap[ds.name] = ds.id;
+                    }
+                });
+            } catch (wsError) {
+                console.warn(`Failed to get data sources from worksheet ${worksheet.name}:`, wsError);
+            }
+        }
+
+        const namesArray = Object.keys(dataSourceMap);
+        if (namesArray.length === 0) {
+            addMessage("⚠️ <strong>No data sources detected</strong><br>Please ensure this dashboard contains worksheets with connected data sources.", "bot");
+            if (messageInput) messageInput.disabled = false;
+            if (sendBtn) sendBtn.disabled = false;
+            return;
+        }
+
+        const dataSourceList = namesArray.map(name => `• <strong>${escapeHtml(name)}</strong>`).join('<br>');
+        addMessage(`🔍 <strong>Found ${namesArray.length} data source(s):</strong><br>${dataSourceList}<br><br>⏳ <em>Initializing connection...</em>`, "bot");
+
+        const resp = await fetch(`${API_BASE_URL}/datasources`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Session-ID': generateSessionId()
+            },
+            body: JSON.stringify({ datasources: dataSourceMap })
+        });
+
+        if (!resp.ok) {
+            const errorData = await resp.json().catch(() => ({ detail: 'Unknown server error' }));
+            throw new Error(errorData.detail || `Server error: ${resp.status} ${resp.statusText}`);
+        }
+
+        datasourceReady = true;
+        if (messageInput) {
+            messageInput.disabled = false;
+            messageInput.placeholder = "Ask me about your data insights...";
+        }
+        if (sendBtn) sendBtn.disabled = false;
+
+        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`, "bot");
+
+    } catch (err) {
+        console.error("Initialization error:", err);
+        let errorMessage = err.message;
+        let suggestions = '';
+        if (errorMessage.includes('Extensions API') || errorMessage.includes('tableau')) {
+            suggestions = '<br><br>📋 <strong>Troubleshooting:</strong><br>• Ensure you\'re running this in a Tableau dashboard<br>• Check that the extension is properly configured';
+        } else if (errorMessage.includes('server') || errorMessage.includes('fetch')) {
+            suggestions = '<br><br>📋 <strong>Troubleshooting:</strong><br>• Check that the Python server is running<br>• Verify network connectivity';
+        }
+        addMessage(`❌ <strong>Initialization Failed</strong><br>${escapeHtml(errorMessage)}${suggestions}`, "bot");
+        if (messageInput) messageInput.disabled = false;
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
+// --- DOMContentLoaded Event Listener ---
+document.addEventListener('DOMContentLoaded', async function() {
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const chatContainer = document.getElementById('chatContainer');
+
     console.log('Using API URL:', API_BASE_URL);
     console.log('Current hostname:', window.location.hostname);
 
-    // Setup event listeners
     if (messageInput) messageInput.addEventListener('keypress', handleEnter);
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
-    
     setupKeyboardShortcuts();
 
-    // Auto-focus on input
-    if (messageInput) {
-        setTimeout(() => messageInput.focus(), 100);
+    const inTableauExtension = typeof tableau !== 'undefined' && tableau.extensions;
+    window._tableauExtensionMode = !!inTableauExtension;
+    if (!inTableauExtension) {
+        datasourceReady = true;
     }
 
-    // Check server health
+    if (messageInput) setTimeout(() => messageInput.focus(), 100);
+
     const serverHealthy = await checkServerHealth();
     if (!serverHealthy) {
-        addMessage(`<strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
+        addMessage(`<strong>Server Connection Issue</strong><br>Unable to connect to the backend at ${API_BASE_URL}. Please ensure the server is running.`, "bot");
+        if (messageInput) messageInput.disabled = false;
+        if (sendBtn) sendBtn.disabled = false;
         return;
     }
 
-    // Show ready message
-    addMessage("<strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
+    if (inTableauExtension) {
+        await listAndSendDashboardDataSources();
+    } else {
+        if (messageInput) messageInput.disabled = false;
+        if (sendBtn) sendBtn.disabled = false;
+        addMessage("<strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
+    }
 });

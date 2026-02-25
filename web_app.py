@@ -32,6 +32,12 @@ class ChatResponse(BaseModel):
     tool_results: List[Dict] = []
     iterations: int = 0
 
+class DataSourcesRequest(BaseModel):
+    datasources: Dict[str, str]  # { "DataSource Name": "luid" }
+
+# Session store for Extension API: datasources sent from dashboard (session_id -> { luids, first_luid })
+DATASOURCE_SESSION_STORE: Dict[str, Dict] = {}
+
 # Create FastAPI app
 app = FastAPI(
     title="Tableau MCP Chat",
@@ -74,6 +80,21 @@ async def get_system_prompt():
     return {
         "systemPrompt": TABLEAU_SYSTEM_PROMPT
     }
+
+@app.post("/datasources")
+async def receive_datasources(request: Request, body: DataSourcesRequest):
+    """Receive datasource map from Tableau Extension (dashboard worksheets)."""
+    session_id = request.headers.get("X-Session-ID") or request.client.host
+    if not body.datasources:
+        raise HTTPException(status_code=400, detail="datasources cannot be empty")
+    first_name, first_id = next(iter(body.datasources.items()))
+    DATASOURCE_SESSION_STORE[session_id] = {
+        "datasources": body.datasources,
+        "first_luid": first_id,
+        "first_name": first_name,
+    }
+    print(f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}")
+    return {"status": "ok", "datasource": first_name}
 
 @app.post("/mcp-chat")
 async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:

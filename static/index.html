@@ -7,17 +7,16 @@
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap" rel="stylesheet">
-    
+    <!-- Load Tableau Extensions API first (no-op when not in Tableau) -->
+    <script src="static/tableau.extensions.1.latest.min.js"></script>
     <!-- Configuration - Set your deployed backend URL here -->
     <script>
-        // Auto-detect environment: use localhost for local development, production URL for deployment
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:8000';
         } else {
             window.API_BASE_URL = 'https://mcpagent.up.railway.app';
         }
     </script>
-    
     <script src="static/script.js" defer></script>
 </head>
 <body>
@@ -30,12 +29,11 @@
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    Hello! I can help you explore your Tableau data sources and provide insights.
+                    Hello! Ask me anything about your Tableau data.
                     <br><br>
-                    Try asking:
-                    <br>• "What data sources do I have access to?"
-                    <br>• "List the fields in the databricks superstore datasource"
-                    <br>• "Show me the top 2 insights"
+                    Try questions like:
+                    <br>• "Show me the top customers by sales"
+                    <br>• "What are the sales trends this quarter?"
                 </div>
             </div>
 
