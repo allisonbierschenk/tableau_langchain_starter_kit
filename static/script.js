@@ -707,6 +707,10 @@ async function listAndSendDashboardDataSources() {
             throw new Error(errorData.detail || `Server error: ${resp.status} ${resp.statusText}`);
         }
 
+        const respData = await resp.json();
+        const datasourceLuid = respData.datasource_luid || dataSourceMap[namesArray[0]];
+        console.log('Datasource LUID (from extension):', datasourceLuid);
+
         datasourceReady = true;
         if (messageInput) {
             messageInput.disabled = false;
@@ -714,7 +718,7 @@ async function listAndSendDashboardDataSources() {
         }
         if (sendBtn) sendBtn.disabled = false;
 
-        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`, "bot");
+        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> (LUID: <code>${escapeHtml(datasourceLuid)}</code>) is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`, "bot");
 
     } catch (err) {
         console.error("Initialization error:", err);

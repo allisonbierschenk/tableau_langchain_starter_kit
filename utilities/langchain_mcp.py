@@ -811,9 +811,21 @@ Available tools:
                     "iterations": iteration
                 }
         
-        # If we hit max iterations, return what we have
+        # If we hit max iterations, ensure we always return a non-empty response
+        final_text = (response.content or "").strip() if hasattr(response, 'content') else ""
+        if not final_text:
+            summary_parts = [f"I ran up against the iteration limit ({MAX_MCP_ITERATIONS} steps) while gathering insights."]
+            if all_tool_results:
+                succeeded = [t for t in all_tool_results if "error" not in t]
+                if succeeded:
+                    summary_parts.append(f" I successfully ran {len(succeeded)} tool call(s). Some tools returned validation errors (e.g. generate-pulse-metric-value-insight-bundle requires a full bundle_request object). Try asking for a specific metric by name or 'list my pulse metrics' for a simpler summary.")
+                else:
+                    summary_parts.append(" The tools I tried hit validation or server errors. Try rephrasing (e.g. 'list my pulse metrics' or 'what datasources do I have?').")
+            else:
+                summary_parts.append(" I wasn't able to complete the analysis. Try asking 'list my pulse metrics' or 'what data sources do I have?'")
+            final_text = "".join(summary_parts)
         return {
-            "response": response.content if hasattr(response, 'content') else "Max iterations reached",
+            "response": final_text,
             "tool_results": all_tool_results,
             "iterations": iteration
         }

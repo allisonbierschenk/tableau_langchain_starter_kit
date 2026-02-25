@@ -93,8 +93,8 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
         "first_luid": first_id,
         "first_name": first_name,
     }
-    print(f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}")
-    return {"status": "ok", "datasource": first_name}
+    print(f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}, datasource_luid={first_id}")
+    return {"status": "ok", "datasource": first_name, "datasource_luid": first_id}
 
 @app.post("/mcp-chat")
 async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:
