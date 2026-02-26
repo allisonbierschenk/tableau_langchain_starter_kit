@@ -9,12 +9,12 @@
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap" rel="stylesheet">
     <!-- Load Tableau Extensions API first (no-op when not in Tableau) -->
     <script src="static/tableau.extensions.1.latest.min.js"></script>
-    <!-- Configuration - Set your deployed backend URL here -->
+    <!-- Configuration: use same origin when deployed so extension talks to this app -->
     <script>
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:8000';
         } else {
-            window.API_BASE_URL = 'https://mcpagent.up.railway.app';
+            window.API_BASE_URL = window.location.origin;
         }
     </script>
     <script src="static/script.js" defer></script>
