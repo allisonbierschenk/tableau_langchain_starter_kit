@@ -237,9 +237,12 @@ TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to Ta
 
 PRIORITY: DASHBOARD / "THIS DATA" CONTEXT
 When the user is in a dashboard and you are given a **Dashboard context** with a datasource LUID below:
-- Questions like "top insights from this data", "insights from this data", "analyze this dashboard", "what does this data show" refer to the **dashboard's datasource**, NOT Pulse metrics.
-- Use `get-datasource-metadata` with that datasourceLuid to get fields, then use `query-datasource` with that LUID to run queries (e.g. top N by measure, trends, breakdowns) and return 3–5 concrete insights with numbers.
-- Do NOT use Pulse tools (list-all-pulse-metric-definitions, generate-pulse-metric-value-insight-bundle, etc.) for "this data" or "dashboard" questions when a dashboard datasource LUID is provided.
+- Treat these as requests to **use the dashboard datasource and return data-driven answers** (do NOT answer with generic advice without querying):
+  - "top insights from this data", "insights from this data", "analyze this dashboard", "what does this data show"
+  - "What should I focus on to be proactive?", "What should I do next?", "What are my priorities?", "Give me recommendations", "What matters most?"
+- For proactive/recommendation questions: use `get-datasource-metadata` to see fields, then `query-datasource` to get key metrics (e.g. top/bottom performers, trends, totals, problem areas). Then give 3–5 **concrete, data-backed recommendations** with numbers (e.g. "Focus on Region X—sales are down 15% vs last period" or "Customer segment Y has the highest churn; prioritize retention there").
+- Use `get-datasource-metadata` with that datasourceLuid to get fields, then `query-datasource` with that LUID to run queries and return insights with numbers. Never respond with only generic advice when a dashboard LUID is provided—always query the data first.
+- Do NOT use Pulse tools for "this data" or "dashboard" questions when a dashboard datasource LUID is provided.
 
 DATA SOURCE QUESTIONS (general or when no dashboard LUID is provided):
 1. Use `list-datasources` to find data sources (or use the provided LUID when in dashboard context).
@@ -688,10 +691,11 @@ Available tools:
         if resolved_luid and preferred_datasource_name:
             system_content += f"""
 
-**Dashboard context (use this for "this data" / "top insights"):** The user is viewing a dashboard connected to the datasource "{preferred_datasource_name}". For "top insights from this data", "insights from this data", or "analyze this dashboard":
-1. Use get-datasource-metadata with datasourceLuid below to see fields.
-2. Use query-datasource with this datasourceLuid to run queries (e.g. top dimensions by a measure, key totals, trends) and return 3–5 insights with numbers.
-Do NOT use Pulse or metric bundle tools for these questions—use only query-datasource and get-datasource-metadata with:
+**Dashboard context:** The user is viewing a dashboard connected to the datasource "{preferred_datasource_name}". For ANY of these you MUST use the datasource and return data-driven answers (never generic advice without querying):
+- "top insights", "insights from this data", "analyze this dashboard"
+- "What should I focus on to be proactive?", "What should I do next?", "Give me recommendations", "What are my priorities?"
+Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) query-datasource with this LUID to get key metrics (top/bottom performers, trends, totals). (3) Answer with 3–5 concrete insights or recommendations with numbers from the query results.
+Use only query-datasource and get-datasource-metadata with:
 - datasourceLuid: `{resolved_luid}`"""
             if dashboard_has_pulse_objects:
                 system_content += """
