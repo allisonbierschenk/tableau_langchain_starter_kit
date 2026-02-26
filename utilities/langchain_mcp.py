@@ -261,11 +261,11 @@ WORKBOOK/VIEW QUESTIONS:
 GENERAL:
 - Use `search-content` to search across workbooks, views, datasources.
 - Ground responses in actual tool results; include numbers and brief insights where possible.
-- **When presenting insights or numbers from query-datasource, you MUST state clearly so people are not confused:**
-  - **Measure(s):** What was aggregated (e.g. SUM(Sales), COUNT(Orders), AVG(CSAT)).
-  - **Time period:** What time scope (e.g. all time, last 30 days, current month, last complete quarter)—or "no time filter" if the query had none.
-  - **Filters:** What filters were applied (e.g. "Region = West", "Segment = Enterprise")—or "no filters" if none.
-  Add a short "Context" or "Query scope" line before or after the insights, e.g.: "Context: SUM(Revenue), last complete quarter, no filters."
+- **When presenting insights or numbers from query-datasource, include at the start of your response a clear scope block** (so users see it immediately, not buried in the body). Format it like this at the top of your reply:
+  **Measures:** [e.g. SUM(Sales), COUNT(Orders)]
+  **Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
+  **Filters:** [e.g. none, or Region = West, Segment = Enterprise]
+  Then give the insights in the body. Do not only mention these in passing in the body—put them in this visible block at the start of the response.
 - If a tool fails, use discovery tools first or try an alternative (e.g. query-datasource with the provided LUID for "this data" instead of Pulse)."""
 
 class MCPHttpClient:
@@ -703,7 +703,11 @@ Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) 
 Use only query-datasource and get-datasource-metadata with:
 - datasourceLuid: `{resolved_luid}`
 
-**Always state measure, time period, and filters:** When you present numbers or insights, you MUST include a clear one- or two-line scope so users are not confused: state the **measure(s)** used (e.g. SUM(Sales), COUNT(Orders)), the **time period** (e.g. last complete quarter, current month, or "all time" / "no time filter"), and **filters** (e.g. "no filters" or "Region = West"). Example: "Context: Measures — SUM(Revenue), COUNT(Orders). Time — last complete quarter. Filters — none."
+**Start every insight response with a visible scope block:** At the very start of your reply (before the insights body), include these three lines so they appear clearly in the response:
+**Measures:** [list what was aggregated, e.g. SUM(Revenue), COUNT(Orders)]
+**Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
+**Filters:** [e.g. none, or list any filters applied]
+Then write the insights. The scope block must be at the top of the response, not only in the body text.
 
 **Pulse Metric cards on the dashboard:** The dashboard may contain Pulse Metric objects. Those cards show values from specific metric definitions (fixed measure, time period, filters). Your answers use query-datasource on the same datasource with flexible queries, so **the numbers you return will not match the Pulse cards.** You MUST add one short sentence to every insight response, e.g.: "These numbers are from the same datasource with flexible queries; if your dashboard has Pulse Metric cards, their values use specific metric definitions and may differ." If the user says the numbers don't match, explain that Pulse cards are predefined metrics and this chat uses ad-hoc queries; for Pulse-based summaries they can ask "List my Pulse metrics" or "Summarize my Pulse metrics."""
         
