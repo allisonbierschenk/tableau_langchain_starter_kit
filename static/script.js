@@ -690,6 +690,13 @@ async function listAndSendDashboardDataSources() {
             return;
         }
 
+        // Collect all dashboard objects (worksheets, Pulse metrics, text, etc.) for context
+        const dashboardObjects = (dashboard.objects || []).map(obj => ({
+            type: String(obj.type || ''),
+            name: String(obj.name || '')
+        }));
+        console.log('Dashboard objects:', dashboardObjects);
+
         const dataSourceList = namesArray.map(name => `• <strong>${escapeHtml(name)}</strong>`).join('<br>');
         addMessage(`🔍 <strong>Found ${namesArray.length} data source(s):</strong><br>${dataSourceList}<br><br>⏳ <em>Initializing connection...</em>`, "bot");
 
@@ -699,7 +706,7 @@ async function listAndSendDashboardDataSources() {
                 'Content-Type': 'application/json',
                 'X-Session-ID': generateSessionId()
             },
-            body: JSON.stringify({ datasources: dataSourceMap })
+            body: JSON.stringify({ datasources: dataSourceMap, dashboard_objects: dashboardObjects })
         });
 
         if (!resp.ok) {
@@ -709,7 +716,8 @@ async function listAndSendDashboardDataSources() {
 
         const respData = await resp.json();
         const datasourceLuid = respData.datasource_luid || dataSourceMap[namesArray[0]];
-        console.log('Datasource LUID (from extension):', datasourceLuid);
+        const hasPulseObjects = !!respData.dashboard_has_pulse_objects;
+        console.log('Datasource LUID (from extension):', datasourceLuid, 'dashboard_has_pulse_objects:', hasPulseObjects);
 
         datasourceReady = true;
         if (messageInput) {
@@ -718,7 +726,12 @@ async function listAndSendDashboardDataSources() {
         }
         if (sendBtn) sendBtn.disabled = false;
 
-        addMessage(`✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> (LUID: <code>${escapeHtml(datasourceLuid)}</code>) is connected.<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`, "bot");
+        let readyHtml = `✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> (LUID: <code>${escapeHtml(datasourceLuid)}</code>) is connected.`;
+        if (hasPulseObjects) {
+            readyHtml += `<br><br>📌 <em>This dashboard includes Pulse Metric objects.</em> Insights use the same datasource; numbers may differ from Pulse cards due to different metric definitions.`;
+        }
+        readyHtml += `<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`;
+        addMessage(readyHtml, "bot");
 
     } catch (err) {
         console.error("Initialization error:", err);
