@@ -690,8 +690,10 @@ async function listAndSendDashboardDataSources() {
             return;
         }
 
-        // Collect all dashboard objects (worksheets, Pulse metrics, text, etc.) for context
+        // Collect all dashboard objects (worksheets, Pulse metrics, text, etc.) for context.
+        // obj.id is the dashboard object/zone id (number); obj.type may be "pulse" or similar for Pulse cards.
         const dashboardObjects = (dashboard.objects || []).map(obj => ({
+            id: obj.id != null ? obj.id : null,
             type: String(obj.type || ''),
             name: String(obj.name || '')
         }));
@@ -727,10 +729,8 @@ async function listAndSendDashboardDataSources() {
         if (sendBtn) sendBtn.disabled = false;
 
         let readyHtml = `✅ <strong>Ready for intelligent analysis!</strong><br>Data source <strong>${escapeHtml(namesArray[0])}</strong> (LUID: <code>${escapeHtml(datasourceLuid)}</code>) is connected.`;
-        if (hasPulseObjects) {
-            readyHtml += `<br><br>📌 <em>This dashboard includes Pulse Metric objects.</em> Insights use the same datasource; numbers may differ from Pulse cards due to different metric definitions.`;
-        }
-        readyHtml += `<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "Show me key performance trends"`;
+        readyHtml += `<br><br>📌 <em>If your dashboard has Pulse Metric cards,</em> those use specific metric definitions (measure, time period, filters). Insights here use the same datasource with flexible queries—<strong>numbers may not match the Pulse cards.</strong> For Pulse-based summaries, try: "List my Pulse metrics" or "Summarize my Pulse metrics."`;
+        readyHtml += `<br><br>💡 <em>Try asking:</em><br>• "What are the top 3 insights from this data?"<br>• "What should I focus on to be proactive?"<br>• "List my Pulse metrics" (to see Pulse-based context)`;
         addMessage(readyHtml, "bot");
 
     } catch (err) {

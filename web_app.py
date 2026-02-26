@@ -34,7 +34,7 @@ class ChatResponse(BaseModel):
 
 class DataSourcesRequest(BaseModel):
     datasources: Dict[str, str]  # { "DataSource Name": "luid" }
-    dashboard_objects: Optional[List[Dict[str, str]]] = None  # [ { "type", "name" } ] from Extensions API
+    dashboard_objects: Optional[List[Dict[str, Any]]] = None  # [ { "id", "type", "name" } ] from Extensions API
 
 # Session store for Extension API: datasources sent from dashboard (session_id -> { luids, first_luid })
 DATASOURCE_SESSION_STORE: Dict[str, Dict] = {}
@@ -82,7 +82,7 @@ async def get_system_prompt():
         "systemPrompt": TABLEAU_SYSTEM_PROMPT
     }
 
-def _dashboard_has_pulse_objects(dashboard_objects: Optional[List[Dict[str, str]]]) -> bool:
+def _dashboard_has_pulse_objects(dashboard_objects: Optional[List[Dict[str, Any]]]) -> bool:
     """True if any dashboard object type looks like a Pulse metric (Extensions API may expose 'pulse' or similar)."""
     if not dashboard_objects:
         return False
@@ -108,7 +108,8 @@ async def receive_datasources(request: Request, body: DataSourcesRequest):
         "dashboard_has_pulse_objects": has_pulse,
         "dashboard_objects": body.dashboard_objects or [],
     }
-    print(f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}, datasource_luid={first_id}, has_pulse_objects={has_pulse}")
+    obj_summary = [(o.get("id"), o.get("type"), o.get("name")) for o in (body.dashboard_objects or [])]
+    print(f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}, datasource_luid={first_id}, has_pulse_objects={has_pulse}, dashboard_objects={obj_summary}")
     return {
         "status": "ok",
         "datasource": first_name,

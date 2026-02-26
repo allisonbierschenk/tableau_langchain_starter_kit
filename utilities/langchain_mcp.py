@@ -261,6 +261,11 @@ WORKBOOK/VIEW QUESTIONS:
 GENERAL:
 - Use `search-content` to search across workbooks, views, datasources.
 - Ground responses in actual tool results; include numbers and brief insights where possible.
+- **When presenting insights or numbers from query-datasource, you MUST state clearly so people are not confused:**
+  - **Measure(s):** What was aggregated (e.g. SUM(Sales), COUNT(Orders), AVG(CSAT)).
+  - **Time period:** What time scope (e.g. all time, last 30 days, current month, last complete quarter)—or "no time filter" if the query had none.
+  - **Filters:** What filters were applied (e.g. "Region = West", "Segment = Enterprise")—or "no filters" if none.
+  Add a short "Context" or "Query scope" line before or after the insights, e.g.: "Context: SUM(Revenue), last complete quarter, no filters."
 - If a tool fails, use discovery tools first or try an alternative (e.g. query-datasource with the provided LUID for "this data" instead of Pulse)."""
 
 class MCPHttpClient:
@@ -696,15 +701,11 @@ Available tools:
 - "What should I focus on to be proactive?", "What should I do next?", "Give me recommendations", "What are my priorities?"
 Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) query-datasource with this LUID to get key metrics (top/bottom performers, trends, totals). (3) Answer with 3–5 concrete insights or recommendations with numbers from the query results.
 Use only query-datasource and get-datasource-metadata with:
-- datasourceLuid: `{resolved_luid}`"""
-            if dashboard_has_pulse_objects:
-                system_content += """
+- datasourceLuid: `{resolved_luid}`
 
-**This dashboard contains Pulse Metric objects.** The numbers on the Pulse cards use specific metric definitions (measure, time period, filters). Your insights use the same underlying datasource via query-datasource but with flexible aggregations, so numbers may differ. When presenting insights, briefly note that they are from the same data source; if the user asks why numbers don't match the Pulse cards, explain that Pulse cards show predefined metrics and your insights are complementary query-based summaries."""
-            else:
-                system_content += """
+**Always state measure, time period, and filters:** When you present numbers or insights, you MUST include a clear one- or two-line scope so users are not confused: state the **measure(s)** used (e.g. SUM(Sales), COUNT(Orders)), the **time period** (e.g. last complete quarter, current month, or "all time" / "no time filter"), and **filters** (e.g. "no filters" or "Region = West"). Example: "Context: Measures — SUM(Revenue), COUNT(Orders). Time — last complete quarter. Filters — none."
 
-If the user says numbers differ from the dashboard or from Pulse cards, explain that Pulse cards (if present) use specific metric definitions while query-datasource uses the same datasource with flexible queries; both are valid views of the same data."""
+**Pulse Metric cards on the dashboard:** The dashboard may contain Pulse Metric objects. Those cards show values from specific metric definitions (fixed measure, time period, filters). Your answers use query-datasource on the same datasource with flexible queries, so **the numbers you return will not match the Pulse cards.** You MUST add one short sentence to every insight response, e.g.: "These numbers are from the same datasource with flexible queries; if your dashboard has Pulse Metric cards, their values use specific metric definitions and may differ." If the user says the numbers don't match, explain that Pulse cards are predefined metrics and this chat uses ad-hoc queries; for Pulse-based summaries they can ask "List my Pulse metrics" or "Summarize my Pulse metrics."""
         
         # Prepare conversation
         messages = [SystemMessage(content=system_content)]
