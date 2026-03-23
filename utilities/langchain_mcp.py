@@ -24,11 +24,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+from utilities.viewer_email import is_likely_email
+
 # Configuration (required: set MCP_SERVER_URL in .env or environment)
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 if not MCP_SERVER_URL:
     raise ValueError("MCP_SERVER_URL environment variable is required")
 MAX_MCP_ITERATIONS = 10  # Reduced for efficiency
+MCP_PROTOCOL_VERSION = "2025-06-18"
 
 # Learning and Memory System
 class LearningMemory:
@@ -270,15 +273,29 @@ GENERAL:
 
 class MCPHttpClient:
     """HTTP-based MCP client similar to the e-bikes demo"""
-    
-    def __init__(self, server_url: str):
+
+    def __init__(self, server_url: str, tableau_jwt_username: Optional[str] = None):
         self.server_url = server_url
         self.session = None
-        
+        email = (tableau_jwt_username or "").strip() if tableau_jwt_username else ""
+        self._tableau_jwt_username = email if is_likely_email(email) else None
+
+    def _mcp_request_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        }
+        if self._tableau_jwt_username:
+            # headers["X-Tableau-Jwt-Username"] = self._tableau_jwt_username
+            headers["X-Tableau-Jwt-Username"] = 'slopez@superstore.com'
+
+        return headers
+
     async def __aenter__(self):
         self.session = httpx.AsyncClient()
         return self
-        
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.aclose()
@@ -332,10 +349,7 @@ class MCPHttpClient:
         response = await self.session.post(
             self.server_url,
             json=request_data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
+            headers=self._mcp_request_headers(),
         )
         response.raise_for_status()
         
@@ -362,10 +376,7 @@ class MCPHttpClient:
         response = await self.session.post(
             self.server_url,
             json=request_data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
+            headers=self._mcp_request_headers(),
         )
         response.raise_for_status()
         
@@ -641,16 +652,20 @@ async def tableau_mcp_chat(
     conversation_history: List[Dict] = None,
     preferred_datasource_name: Optional[str] = None,
     dashboard_has_pulse_objects: bool = False,
+    tableau_viewer_id: Optional[str] = None,
+    viewer_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process a chat query using MCP tools and LangChain agent.
     If preferred_datasource_name is set (from extension session), resolve it to published LUID and inject so the agent uses it.
     If dashboard_has_pulse_objects is True, the agent will explain why numbers may differ from Pulse cards on the dashboard.
+    If tableau_viewer_id is set (from extension workbook parameters / sheet context), inject viewer identity for personalization.
+    viewer_email: when it passes is_likely_email, sent to the MCP server as X-Tableau-Jwt-Username (same as pick_viewer_email on /datasources).
     """
     if conversation_history is None:
         conversation_history = []
-    
-    async with MCPHttpClient(MCP_SERVER_URL) as mcp_client:
+
+    async with MCPHttpClient(MCP_SERVER_URL, tableau_jwt_username=viewer_email) as mcp_client:
         # Get available tools
         tools_data = await mcp_client.list_tools()
         print(f"Found {len(tools_data)} MCP tools: {[t['name'] for t in tools_data]}")
@@ -693,6 +708,11 @@ async def tableau_mcp_chat(
 Available tools:
 {chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}"""
         
+        if tableau_viewer_id:
+            system_content += f"""
+
+**Viewer identity (from extension / workbook):** `{tableau_viewer_id}`. If it contains @, treat it as the viewer's email when appropriate. Use for personalization only when appropriate."""
+
         if resolved_luid and preferred_datasource_name:
             system_content += f"""
 
@@ -729,6 +749,11 @@ Then write the insights. The scope block must be at the top of the response, not
         iteration = 0
         consecutive_failed_tools = 0
         max_failed_attempts = 3
+
+        def _with_viewer_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+            payload["logged_in_as"] = tableau_viewer_id
+            payload["tableau_viewer_id"] = tableau_viewer_id
+            return payload
         
         while iteration < MAX_MCP_ITERATIONS and consecutive_failed_tools < max_failed_attempts:
             iteration += 1
@@ -839,11 +864,11 @@ Then write the insights. The scope block must be at the top of the response, not
                             ))
             else:
                 # No tool calls, we're done
-                return {
+                return _with_viewer_fields({
                     "response": response.content,
                     "tool_results": all_tool_results,
                     "iterations": iteration
-                }
+                })
         
         # If we hit max iterations, ensure we always return a non-empty response
         final_text = (response.content or "").strip() if hasattr(response, 'content') else ""
@@ -858,11 +883,11 @@ Then write the insights. The scope block must be at the top of the response, not
             else:
                 summary_parts.append(" I wasn't able to complete the analysis. Try asking 'list my pulse metrics' or 'what data sources do I have?'")
             final_text = "".join(summary_parts)
-        return {
+        return _with_viewer_fields({
             "response": final_text,
             "tool_results": all_tool_results,
             "iterations": iteration
-        }
+        })
 
 # For backward compatibility
 async def langchain_mcp_chat(query: str) -> Dict[str, Any]:

@@ -25,15 +25,18 @@
         <div class="container">
             <header>
                 <h1>Conversational Analytics</h1>
+                <p id="viewerIdentityBar" class="viewer-identity-bar" aria-live="polite">
+                    <span class="viewer-identity-row">
+                        <span id="viewerIdentityLabel" class="viewer-identity-label">Dynamic User</span>
+                        <span id="viewerIdentityValue" class="viewer-identity-value">—</span>
+                    </span>
+                    <span id="viewerIdentitySub" class="viewer-identity-sub" hidden></span>
+                </p>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
                     Hello! Ask me anything about your Tableau data.
-                    <br><br>
-                    Try questions like:
-                    <br>• "Show me the top customers by sales"
-                    <br>• "What are the sales trends this quarter?"
                 </div>
             </div>
 
