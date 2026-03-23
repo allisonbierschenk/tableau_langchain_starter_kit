@@ -287,8 +287,8 @@ class MCPHttpClient:
             "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
         }
         if self._tableau_jwt_username:
-            # headers["X-Tableau-Jwt-Username"] = self._tableau_jwt_username
-            headers["X-Tableau-Jwt-Username"] = 'slopez@superstore.com'
+            headers["X-Tableau-Jwt-Username"] = self._tableau_jwt_username
+            # headers["X-Tableau-Jwt-Username"] = 'slopez@superstore.com'
 
         return headers
 
