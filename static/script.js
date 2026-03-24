@@ -2,7 +2,7 @@
 
 const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
     ? 'http://localhost:8000' 
-    : 'https://mcpagent.up.railway.app');
+    : 'https://mcp-extensionapi-langchain.up.railway.app');
 
 /** Legacy workbook parameter name for viewer login (optional if using Dynamic User or user-context sheet). */
 const TABLEAU_CURRENT_USER_PARAMETER = 'p_CurrentUser';
