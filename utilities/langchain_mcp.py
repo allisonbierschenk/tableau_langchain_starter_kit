@@ -24,11 +24,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+from utilities.viewer_email import is_likely_email
+
 # Configuration (required: set MCP_SERVER_URL in .env or environment)
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 if not MCP_SERVER_URL:
     raise ValueError("MCP_SERVER_URL environment variable is required")
 MAX_MCP_ITERATIONS = 10  # Reduced for efficiency
+MCP_PROTOCOL_VERSION = "2025-06-18"
 
 # Learning and Memory System
 class LearningMemory:
@@ -233,62 +236,66 @@ def _get_contextual_guidance(query: str, question_type: str, best_approach: dict
     return ""
 
 # Intelligent system prompt with structured tool usage patterns
-TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to Tableau data through MCP tools. Help users understand their data by using tools strategically to get information and presenting it with insights.
+TABLEAU_SYSTEM_PROMPT = """You are an intelligent data analyst with access to Tableau data through MCP tools. Help users understand their data by using tools strategically and presenting insights.
 
-TOOL USAGE PATTERNS:
+PRIORITY: DASHBOARD / "THIS DATA" CONTEXT
+When the user is in a dashboard and you are given a **Dashboard context** with a datasource LUID below:
+- Treat these as requests to **use the dashboard datasource and return data-driven answers** (do NOT answer with generic advice without querying):
+  - "top insights from this data", "insights from this data", "analyze this dashboard", "what does this data show"
+  - "What should I focus on to be proactive?", "What should I do next?", "What are my priorities?", "Give me recommendations", "What matters most?"
+- For proactive/recommendation questions: use `get-datasource-metadata` to see fields, then `query-datasource` to get key metrics (e.g. top/bottom performers, trends, totals, problem areas). Then give 3–5 **concrete, data-backed recommendations** with numbers (e.g. "Focus on Region X—sales are down 15% vs last period" or "Customer segment Y has the highest churn; prioritize retention there").
+- Use `get-datasource-metadata` with that datasourceLuid to get fields, then `query-datasource` with that LUID to run queries and return insights with numbers. Never respond with only generic advice when a dashboard LUID is provided—always query the data first.
+- Do NOT use Pulse tools for "this data" or "dashboard" questions when a dashboard datasource LUID is provided.
 
-For Pulse Metrics Questions (e.g., "list my pulse metrics", "top metrics", "concerning metrics"):
-1. First: Use `list-all-pulse-metric-definitions` to discover available metrics
-2. Then: Get metric IDs using `list-pulse-metrics-from-metric-definition-id` (use the definition IDs from step 1)
-3. Finally: Use `generate-pulse-metric-value-insight-bundle` with:
-   - `bundleRequest`: {"pulseMetricIds": ["metric-id-1", "metric-id-2", ...]} (use the metric IDs from step 2)
-   - `bundleType`: "FULL" (to get complete insights)
-4. Always: Extract and present the actual metric values, trends, and insights from the results
-   - Don't just list metric definitions - get the real numbers and insights!
+DATA SOURCE QUESTIONS (general or when no dashboard LUID is provided):
+1. Use `list-datasources` to find data sources (or use the provided LUID when in dashboard context).
+2. Use `get-datasource-metadata` to get field information.
+3. Use `query-datasource` to run queries and get actual data. Prefer aggregation (SUM, COUNT, AVG) and TOP filters for "top N" questions.
 
-For Data Source Questions (e.g., "what data sources do I have", "fields in a datasource"):
-1. Use `list-datasources` to find available data sources
-2. Use `get-datasource-metadata` to get field information
-3. Use `query-datasource` to run queries and get actual data
+PULSE METRICS (only when user explicitly asks about Pulse/metrics):
+- Use when the user says "my pulse metrics", "list pulse metrics", "pulse insights", "Tableau Pulse", etc.
+- Use `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` to discover metrics, then `list-pulse-metrics-from-metric-definition-id` to get metric IDs and details.
+- For a short summary: present the list of metrics and their definitions; you do not need to call `generate-pulse-metric-value-insight-bundle`.
+- **Do NOT call `generate-pulse-metric-value-insight-bundle`** with only `pulseMetricIds`. That tool requires a **full bundle_request object** (version, options, input.metadata, input.metric with definition, specification, etc.). Building that from list results is complex. Prefer summarizing list results or using `generate-pulse-insight-brief` for natural language questions about metrics if the request fits that tool's parameters.
 
-For Workbook/View Questions (e.g., "show me workbooks", "get view data"):
-1. Use `list-workbooks` to find workbooks
-2. Use `get-workbook` for workbook details
-3. Use `list-views` to find views
-4. Use `get-view-data` for CSV data or `get-view-image` for screenshots
+WORKBOOK/VIEW QUESTIONS:
+- Use `list-workbooks`, `get-workbook`, `list-views`, `get-view-data`, `get-view-image` as needed.
 
-For General Content Search:
-- Use `search-content` to search across workbooks, views, datasources, etc.
-
-CRITICAL RULES:
-- When users ask about "metrics" or "insights", you MUST use `generate-pulse-metric-value-insight-bundle` to get actual insights
-- Never stop at just listing metric definitions - always get the actual values and insights
-- Always ground your responses in the actual data you collect from the Tableau MCP server
-- Always include insights - help users understand what the data means, what trends you see, and why it matters
-- Present specific numbers, values, and business insights, not just tool outputs
-
-WHEN YOU'RE NOT SURE WHAT TO DO:
-- If a query is ambiguous, use `search-content` to explore what's available, then ask clarifying questions
-- If you need metric IDs but only have names, use `list-all-pulse-metric-definitions` to find matching IDs
-- If a tool fails, try alternative tools or approaches (e.g., if `list-pulse-metrics-from-metric-ids` fails, try `generate-pulse-metric-value-insight-bundle`)
-- If you're missing required parameters, use discovery tools first (e.g., `list-datasources` before `query-datasource`)
-- When in doubt, start with broad discovery tools (`list-all-pulse-metric-definitions`, `list-datasources`, `list-workbooks`) to understand what's available
-- If you can't determine the user's intent, ask a clarifying question while also showing what options are available
-- Always try to be helpful - even if you're uncertain, make your best attempt using available tools and explain what you found
-
-Use your judgment to determine the best tool sequence, but follow these patterns to ensure you get complete, insightful answers."""
+GENERAL:
+- Use `search-content` to search across workbooks, views, datasources.
+- Ground responses in actual tool results; include numbers and brief insights where possible.
+- **When presenting insights or numbers from query-datasource, include at the start of your response a clear scope block** (so users see it immediately, not buried in the body). Format it like this at the top of your reply:
+  **Measures:** [e.g. SUM(Sales), COUNT(Orders)]
+  **Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
+  **Filters:** [e.g. none, or Region = West, Segment = Enterprise]
+  Then give the insights in the body. Do not only mention these in passing in the body—put them in this visible block at the start of the response.
+- If a tool fails, use discovery tools first or try an alternative (e.g. query-datasource with the provided LUID for "this data" instead of Pulse)."""
 
 class MCPHttpClient:
     """HTTP-based MCP client similar to the e-bikes demo"""
-    
-    def __init__(self, server_url: str):
+
+    def __init__(self, server_url: str, tableau_jwt_username: Optional[str] = None):
         self.server_url = server_url
         self.session = None
-        
+        email = (tableau_jwt_username or "").strip() if tableau_jwt_username else ""
+        self._tableau_jwt_username = email if is_likely_email(email) else None
+
+    def _mcp_request_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        }
+        if self._tableau_jwt_username:
+            headers["X-Tableau-Jwt-Username"] = self._tableau_jwt_username
+            # headers["X-Tableau-Jwt-Username"] = 'slopez@superstore.com'
+
+        return headers
+
     async def __aenter__(self):
         self.session = httpx.AsyncClient()
         return self
-        
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.aclose()
@@ -342,10 +349,7 @@ class MCPHttpClient:
         response = await self.session.post(
             self.server_url,
             json=request_data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
+            headers=self._mcp_request_headers(),
         )
         response.raise_for_status()
         
@@ -372,10 +376,7 @@ class MCPHttpClient:
         response = await self.session.post(
             self.server_url,
             json=request_data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
+            headers=self._mcp_request_headers(),
         )
         response.raise_for_status()
         
@@ -506,38 +507,31 @@ class MCPTool(BaseTool):
                         kwargs["datasourceLuid"] = value
                         break
         elif self.tool_name == "generate-pulse-metric-value-insight-bundle":
-            # Fix generate-pulse-metric-value-insight-bundle argument structure
-            # The tool expects: bundleRequest with pulseMetricIds array, and bundleType
-            if "bundleRequest" in kwargs:
-                # Already in correct format
-                pass
-            elif "pulseMetricIds" in kwargs or "pulseMetricId" in kwargs:
-                # Convert to bundleRequest format
-                metric_ids = kwargs.pop("pulseMetricIds", kwargs.pop("pulseMetricId", None))
-                if metric_ids:
-                    # Ensure it's a list
-                    if isinstance(metric_ids, str):
-                        metric_ids = [metric_ids]
-                    bundle_request = {"pulseMetricIds": metric_ids}
-                    kwargs["bundleRequest"] = bundle_request
-                # Set bundleType if not provided (default to "FULL")
-                if "bundleType" not in kwargs:
-                    kwargs["bundleType"] = "FULL"
-            elif "bundleType" in kwargs and "bundleRequest" not in kwargs:
-                # Invalid - bundleType without bundleRequest
-                # Try to construct from other args
-                if "metricId" in kwargs or "metricIds" in kwargs:
-                    metric_ids = kwargs.pop("metricId", kwargs.pop("metricIds", None))
-                    if metric_ids:
-                        if isinstance(metric_ids, str):
-                            metric_ids = [metric_ids]
-                        kwargs["bundleRequest"] = {"pulseMetricIds": metric_ids}
+            # MCP server requires bundleRequest.bundle_request (full object). We do not build from pulseMetricIds.
+            pass
         return kwargs
+
+    def _has_only_pulse_metric_ids(self, kwargs: dict) -> bool:
+        """True if generate-pulse-metric-value-insight-bundle was called with only pulseMetricIds (no full bundle_request)."""
+        if self.tool_name != "generate-pulse-metric-value-insight-bundle":
+            return False
+        br = kwargs.get("bundleRequest") or kwargs
+        if isinstance(br, dict) and br.get("bundle_request") is not None:
+            return False
+        return bool(br.get("pulseMetricIds") or kwargs.get("pulseMetricIds"))
 
     async def _arun(self, **kwargs) -> str:
         """Execute the MCP tool with argument validation and retry logic"""
         # Validate and fix arguments
         kwargs = self._validate_and_fix_arguments(kwargs)
+        
+        # Avoid calling generate-pulse-metric-value-insight-bundle with only pulseMetricIds—server rejects it
+        if self._has_only_pulse_metric_ids(kwargs):
+            return (
+                "generate-pulse-metric-value-insight-bundle requires a full bundle_request object (version, options, input.metadata, input.metric with definition/specification), not just pulseMetricIds. "
+                "For 'insights from this data' or dashboard questions, use get-datasource-metadata and query-datasource with the provided datasourceLuid instead. "
+                "For Pulse metrics, summarize the results from list-pulse-metrics-from-metric-definition-id or use generate-pulse-insight-brief if the question fits that tool."
+            )
         
         max_retries = 2
         for attempt in range(max_retries + 1):
@@ -595,20 +589,8 @@ class MCPTool(BaseTool):
                             if "datasourceLuid" in query:
                                 kwargs["datasourceLuid"] = query.pop("datasourceLuid")
                     elif self.tool_name == "generate-pulse-metric-value-insight-bundle":
-                        # Try to fix bundle request format
-                        if "bundleRequest" not in kwargs:
-                            # Look for metric IDs in various formats
-                            metric_ids = None
-                            for key in ["pulseMetricIds", "pulseMetricId", "metricIds", "metricId", "metric_id"]:
-                                if key in kwargs:
-                                    metric_ids = kwargs.pop(key)
-                                    break
-                            if metric_ids:
-                                if isinstance(metric_ids, str):
-                                    metric_ids = [metric_ids]
-                                kwargs["bundleRequest"] = {"pulseMetricIds": metric_ids}
-                                if "bundleType" not in kwargs:
-                                    kwargs["bundleType"] = "FULL"
+                        # Server requires full bundle_request; we cannot build it from IDs. Do not retry.
+                        pass
                     continue
                 else:
                     # Return full error message so agent can see what went wrong
@@ -635,18 +617,67 @@ async def create_mcp_tools() -> List[MCPTool]:
         
         return tools
 
-async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+async def _resolve_datasource_luid_by_name(mcp_client: "MCPHttpClient", preferred_name: str) -> Optional[str]:
+    """Call list-datasources with name filter and return the published datasource LUID (id) for the first match."""
+    try:
+        content = await mcp_client.call_tool("list-datasources", {"filter": f"name:eq:{preferred_name}"})
+        if not content:
+            return None
+        # MCP content can be list of parts [{"type":"text","text":"..."}] or a single string
+        text = None
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    break
+        elif isinstance(content, str):
+            text = content
+        if not text:
+            return None
+        parsed = json.loads(text) if isinstance(text, str) and (text.strip().startswith("[") or text.strip().startswith("{")) else None
+        if not parsed:
+            return None
+        items = parsed if isinstance(parsed, list) else parsed.get("datasources", parsed.get("value", []))
+        if not items or not isinstance(items, list):
+            return None
+        first = items[0]
+        return first.get("id") or first.get("luid") if isinstance(first, dict) else None
+    except Exception as e:
+        print(f"⚠️ Could not resolve datasource LUID for name '{preferred_name}': {e}")
+        return None
+
+
+async def tableau_mcp_chat(
+    query: str,
+    conversation_history: List[Dict] = None,
+    preferred_datasource_name: Optional[str] = None,
+    dashboard_has_pulse_objects: bool = False,
+    tableau_viewer_id: Optional[str] = None,
+    viewer_email: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Process a chat query using MCP tools and LangChain agent
-    Using proper LangChain tool integration
+    Process a chat query using MCP tools and LangChain agent.
+    If preferred_datasource_name is set (from extension session), resolve it to published LUID and inject so the agent uses it.
+    If dashboard_has_pulse_objects is True, the agent will explain why numbers may differ from Pulse cards on the dashboard.
+    If tableau_viewer_id is set (from extension workbook parameters / sheet context), inject viewer identity for personalization.
+    viewer_email: when it passes is_likely_email, sent to the MCP server as X-Tableau-Jwt-Username (same as pick_viewer_email on /datasources).
     """
     if conversation_history is None:
         conversation_history = []
-    
-    async with MCPHttpClient(MCP_SERVER_URL) as mcp_client:
+
+    async with MCPHttpClient(MCP_SERVER_URL, tableau_jwt_username=viewer_email) as mcp_client:
         # Get available tools
         tools_data = await mcp_client.list_tools()
         print(f"Found {len(tools_data)} MCP tools: {[t['name'] for t in tools_data]}")
+        
+        # Resolve extension datasource name -> published LUID so agent uses correct datasource
+        resolved_luid = None
+        if preferred_datasource_name:
+            resolved_luid = await _resolve_datasource_luid_by_name(mcp_client, preferred_datasource_name)
+            if resolved_luid:
+                print(f"📌 Resolved dashboard datasource '{preferred_datasource_name}' -> LUID {resolved_luid}")
+            else:
+                print(f"⚠️ Could not resolve LUID for '{preferred_datasource_name}'; agent will discover datasources")
         
         # Create LangChain tools from MCP tools
         langchain_tools = []
@@ -665,7 +696,7 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
             api_key=os.getenv("OPENAI_API_KEY"),
             temperature=0.1,
             max_tokens=1000,  # Reduce token usage
-            request_timeout=120  # Allow time for cold start / slow networks on deploy
+            request_timeout=120  # Extended for cold start / slow networks on deploy (was 30)
         )
         
         # Bind tools to the model
@@ -676,6 +707,29 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
 
 Available tools:
 {chr(10).join([f"- {tool['name']}: {tool['description']}" for tool in tools_data])}"""
+        
+        if tableau_viewer_id:
+            system_content += f"""
+
+**Viewer identity (from extension / workbook):** `{tableau_viewer_id}`. If it contains @, treat it as the viewer's email when appropriate. Use for personalization only when appropriate."""
+
+        if resolved_luid and preferred_datasource_name:
+            system_content += f"""
+
+**Dashboard context:** The user is viewing a dashboard connected to the datasource "{preferred_datasource_name}". For ANY of these you MUST use the datasource and return data-driven answers (never generic advice without querying):
+- "top insights", "insights from this data", "analyze this dashboard"
+- "What should I focus on to be proactive?", "What should I do next?", "Give me recommendations", "What are my priorities?"
+Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) query-datasource with this LUID to get key metrics (top/bottom performers, trends, totals). (3) Answer with 3–5 concrete insights or recommendations with numbers from the query results.
+Use only query-datasource and get-datasource-metadata with:
+- datasourceLuid: `{resolved_luid}`
+
+**Start every insight response with a visible scope block:** At the very start of your reply (before the insights body), include these three lines so they appear clearly in the response:
+**Measures:** [list what was aggregated, e.g. SUM(Revenue), COUNT(Orders)]
+**Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
+**Filters:** [e.g. none, or list any filters applied]
+Then write the insights. The scope block must be at the top of the response, not only in the body text.
+
+**Pulse Metric cards on the dashboard:** The dashboard may contain Pulse Metric objects. Those cards show values from specific metric definitions (fixed measure, time period, filters). Your answers use query-datasource on the same datasource with flexible queries, so **the numbers you return will not match the Pulse cards.** You MUST add one short sentence to every insight response, e.g.: "These numbers are from the same datasource with flexible queries; if your dashboard has Pulse Metric cards, their values use specific metric definitions and may differ." If the user says the numbers don't match, explain that Pulse cards are predefined metrics and this chat uses ad-hoc queries; for Pulse-based summaries they can ask "List my Pulse metrics" or "Summarize my Pulse metrics."""
         
         # Prepare conversation
         messages = [SystemMessage(content=system_content)]
@@ -695,6 +749,11 @@ Available tools:
         iteration = 0
         consecutive_failed_tools = 0
         max_failed_attempts = 3
+
+        def _with_viewer_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+            payload["logged_in_as"] = tableau_viewer_id
+            payload["tableau_viewer_id"] = tableau_viewer_id
+            return payload
         
         while iteration < MAX_MCP_ITERATIONS and consecutive_failed_tools < max_failed_attempts:
             iteration += 1
@@ -805,18 +864,30 @@ Available tools:
                             ))
             else:
                 # No tool calls, we're done
-                return {
+                return _with_viewer_fields({
                     "response": response.content,
                     "tool_results": all_tool_results,
                     "iterations": iteration
-                }
+                })
         
-        # If we hit max iterations, return what we have
-        return {
-            "response": response.content if hasattr(response, 'content') else "Max iterations reached",
+        # If we hit max iterations, ensure we always return a non-empty response
+        final_text = (response.content or "").strip() if hasattr(response, 'content') else ""
+        if not final_text:
+            summary_parts = [f"I ran up against the iteration limit ({MAX_MCP_ITERATIONS} steps) while gathering insights."]
+            if all_tool_results:
+                succeeded = [t for t in all_tool_results if "error" not in t]
+                if succeeded:
+                    summary_parts.append(f" I successfully ran {len(succeeded)} tool call(s). For 'insights from this data', use the dashboard datasource with query-datasource; for Pulse, try 'list my pulse metrics' for a summary.")
+                else:
+                    summary_parts.append(" The tools I tried hit validation or server errors. Try rephrasing (e.g. 'list my pulse metrics' or 'what datasources do I have?').")
+            else:
+                summary_parts.append(" I wasn't able to complete the analysis. Try asking 'list my pulse metrics' or 'what data sources do I have?'")
+            final_text = "".join(summary_parts)
+        return _with_viewer_fields({
+            "response": final_text,
             "tool_results": all_tool_results,
             "iterations": iteration
-        }
+        })
 
 # For backward compatibility
 async def langchain_mcp_chat(query: str) -> Dict[str, Any]:

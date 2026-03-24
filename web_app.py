@@ -6,14 +6,14 @@ Using HTTP MCP client like the e-bikes demo
 import os
 import json
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Web UI Libraries
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Load Environment
 from dotenv import load_dotenv
@@ -21,6 +21,7 @@ load_dotenv()
 
 # Import our HTTP MCP integration
 from utilities.langchain_mcp import tableau_mcp_chat
+from utilities.viewer_email import pick_viewer_email
 
 # Request/Response models
 class ChatRequest(BaseModel):
@@ -31,6 +32,29 @@ class ChatResponse(BaseModel):
     response: str
     tool_results: List[Dict] = []
     iterations: int = 0
+    logged_in_as: Optional[str] = None  # Merged viewer string from extension workbook context
+    tableau_viewer_id: Optional[str] = None
+
+class DataSourcesRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    datasources: Dict[str, str]  # { "DataSource Name": "luid" }
+    dashboard_objects: Optional[List[Dict[str, Any]]] = None  # [ { "id", "type", "name" } ] from Extensions API
+    # Workbook parameters / sheet-derived login from extension (e.g. Dynamic User, USERNAME() sheet)
+    workbook_current_user: Optional[str] = None
+    # Optional: p_UserEmail = USERNAME() on Cloud (often email) or USERATTRIBUTE('email') with Connected Apps
+    workbook_user_email: Optional[str] = None
+
+
+class TableauActionRequest(BaseModel):
+    """Silent hook from extension (audit, refresh triggers, etc.)."""
+
+    user: str
+    action: str = "audit_log"
+    meta: Optional[Dict[str, Any]] = None
+
+# Session store for Extension API: datasources sent from dashboard (session_id -> { luids, first_luid })
+DATASOURCE_SESSION_STORE: Dict[str, Dict] = {}
 
 # Create FastAPI app
 app = FastAPI(
@@ -75,22 +99,126 @@ async def get_system_prompt():
         "systemPrompt": TABLEAU_SYSTEM_PROMPT
     }
 
+def _dashboard_has_pulse_objects(dashboard_objects: Optional[List[Dict[str, Any]]]) -> bool:
+    """True if any dashboard object type looks like a Pulse metric (Extensions API may expose 'pulse' or similar)."""
+    if not dashboard_objects:
+        return False
+    for obj in dashboard_objects:
+        t = (obj.get("type") or "").lower()
+        if "pulse" in t or t == "pulse-metric":
+            return True
+    return False
+
+
+@app.post("/datasources")
+async def receive_datasources(request: Request, body: DataSourcesRequest):
+    """Receive datasource map and optional dashboard objects from Tableau Extension."""
+    session_id = request.headers.get("X-Session-ID") or request.client.host
+    if not body.datasources:
+        raise HTTPException(status_code=400, detail="datasources cannot be empty")
+    first_name, first_id = next(iter(body.datasources.items()))
+    has_pulse = _dashboard_has_pulse_objects(body.dashboard_objects)
+    workbook_user = (body.workbook_current_user or "").strip() or None
+    workbook_email_param = (body.workbook_user_email or "").strip() or None
+    viewer_email = pick_viewer_email(workbook_email_param, workbook_user)
+    viewer_identity = viewer_email or workbook_user
+    DATASOURCE_SESSION_STORE[session_id] = {
+        "datasources": body.datasources,
+        "first_luid": first_id,
+        "first_name": first_name,
+        "dashboard_has_pulse_objects": has_pulse,
+        "dashboard_objects": body.dashboard_objects or [],
+        "viewer_identity": viewer_identity,
+        "viewer_email": viewer_email,
+        "workbook_current_user": workbook_user,
+        "workbook_user_email": workbook_email_param,
+    }
+    obj_summary = [(o.get("id"), o.get("type"), o.get("name")) for o in (body.dashboard_objects or [])]
+    print(
+        f"📥 /datasources: session={session_id}, sources={list(body.datasources.keys())}, "
+        f"datasource_luid={first_id}, has_pulse_objects={has_pulse}, "
+        f"workbook_user={bool(workbook_user)}, viewer_email={bool(viewer_email)}, dashboard_objects={obj_summary}"
+    )
+    if viewer_email:
+        print(f"📧 X-Tableau-Jwt-Username: {viewer_email} (session={session_id})")
+    else:
+        print(f"📧 X-Tableau-Jwt-Username: (not sent — no validated viewer email) (session={session_id})")
+    return {
+        "status": "ok",
+        "datasource": first_name,
+        "datasource_luid": first_id,
+        "dashboard_has_pulse_objects": has_pulse,
+        "viewer_email": viewer_email,
+        "logged_in_as": viewer_identity,
+        "tableau_viewer_id": viewer_identity,
+        "workbook_current_user": workbook_user,
+        "workbook_user_email": workbook_email_param,
+    }
+
+
+@app.get("/session-context")
+async def get_session_context(request: Request):
+    """Return stored extension session info (requires X-Session-ID from the extension client)."""
+    session_id = request.headers.get("X-Session-ID") or (request.client.host if request.client else "") or ""
+    ctx = _get_session_context(session_id)
+    entry = DATASOURCE_SESSION_STORE.get(session_id) or {}
+    return {
+        "session_id": session_id,
+        "logged_in_as": ctx.get("tableau_viewer_id"),
+        "tableau_viewer_id": ctx.get("tableau_viewer_id"),
+        "viewer_email": entry.get("viewer_email"),
+        "workbook_current_user": entry.get("workbook_current_user"),
+        "workbook_user_email": entry.get("workbook_user_email"),
+        "preferred_datasource_name": ctx.get("preferred_datasource_name"),
+        "dashboard_has_pulse_objects": ctx.get("dashboard_has_pulse_objects"),
+        "has_datasources": bool(entry.get("datasources")),
+    }
+
+
+@app.post("/tableau-action")
+async def tableau_action(request: Request, body: TableauActionRequest):
+    """Extension → server hook for audit or other middleware-style actions (CORS-friendly same-origin)."""
+    session_id = request.headers.get("X-Session-ID") or (request.client.host if request.client else "")
+    print(
+        f"📋 /tableau-action: session={session_id}, action={body.action}, user_set={bool((body.user or '').strip())}"
+    )
+    return {"status": "ok", "received": True}
+
+
+def _get_session_context(session_id: str) -> Dict[str, Any]:
+    """Return session context: datasource preference, Pulse hint, merged viewer identity for the agent."""
+    entry = DATASOURCE_SESSION_STORE.get(session_id) or {}
+    merged = entry.get("viewer_identity") or entry.get("tableau_viewer_id")
+    return {
+        "preferred_datasource_name": entry.get("first_name"),
+        "dashboard_has_pulse_objects": bool(entry.get("dashboard_has_pulse_objects")),
+        "tableau_viewer_id": merged,
+        "viewer_email": entry.get("viewer_email"),
+    }
+
+
 @app.post("/mcp-chat")
-async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:
+async def mcp_chat_endpoint(chat_request: ChatRequest, request: Request) -> ChatResponse:
     """MCP chat endpoint (non-streaming) - matches e-bikes demo pattern"""
     try:
-        print(f"💬 MCP Chat request: {request.message}")
-        
-        # Process with MCP
+        print(f"💬 MCP Chat request: {chat_request.message}")
+        session_id = request.headers.get("X-Session-ID") or (request.client and request.client.host) or ""
+        ctx = _get_session_context(session_id)
         result = await tableau_mcp_chat(
-            query=request.message,
-            conversation_history=request.history
+            query=chat_request.message,
+            conversation_history=chat_request.history,
+            preferred_datasource_name=ctx.get("preferred_datasource_name"),
+            dashboard_has_pulse_objects=ctx.get("dashboard_has_pulse_objects", False),
+            tableau_viewer_id=ctx.get("tableau_viewer_id"),
+            viewer_email=ctx.get("viewer_email"),
         )
         
         return ChatResponse(
             response=result["response"],
             tool_results=result["tool_results"],
-            iterations=result["iterations"]
+            iterations=result["iterations"],
+            logged_in_as=result.get("logged_in_as"),
+            tableau_viewer_id=result.get("tableau_viewer_id"),
         )
         
     except Exception as e:
@@ -98,8 +226,10 @@ async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/mcp-chat-stream")
-async def mcp_chat_stream_endpoint(request: ChatRequest):
+async def mcp_chat_stream_endpoint(chat_request: ChatRequest, request: Request):
     """MCP chat streaming endpoint with user-friendly progress"""
+    session_id = request.headers.get("X-Session-ID") or (request.client and request.client.host) or ""
+    ctx = _get_session_context(session_id)
     
     async def generate_stream():
         try:
@@ -119,10 +249,13 @@ async def mcp_chat_stream_endpoint(request: ChatRequest):
             yield f"event: progress\n"
             yield f"data: {{\"message\": \"Analyzing your question and planning data exploration...\", \"step\": \"planning\"}}\n\n"
             
-            # Process with MCP
             result = await tableau_mcp_chat(
-                query=request.message,
-                conversation_history=request.history
+                query=chat_request.message,
+                conversation_history=chat_request.history,
+                preferred_datasource_name=ctx.get("preferred_datasource_name"),
+                dashboard_has_pulse_objects=ctx.get("dashboard_has_pulse_objects", False),
+                tableau_viewer_id=ctx.get("tableau_viewer_id"),
+                viewer_email=ctx.get("viewer_email"),
             )
             
             # Send final result
