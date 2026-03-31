@@ -100,24 +100,6 @@ This will test:
 - Web interface accessibility
 - Chat functionality
 
-## Additional Features
-
-### 🔐 **Admin Agent** (New!)
-
-A dedicated admin agent for managing Tableau Cloud users and groups via MCP server.
-
-- **User Management**: Add, update, delete, and list users
-- **Group Management**: Create, update, delete groups, and manage memberships
-- **Natural Language Interface**: Interact using plain English admin requests
-
-See [README_ADMIN_AGENT.md](README_ADMIN_AGENT.md) for detailed documentation.
-
-To run the admin agent:
-```bash
-# Configure ADMIN_MCP_SERVER in .env
-python admin_web_app.py  # Runs on port 8001 by default
-```
-
 ## Key Improvements
 
 1. **Removed Tableau Extensions API dependency** - Now works as a standalone application
