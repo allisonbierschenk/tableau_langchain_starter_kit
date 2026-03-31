@@ -17,10 +17,10 @@ config = {
     "run_name": "Tableau MCP Main.py"
 }
 
-# MCP Configuration (required: set MCP_SERVER_URL in .env or environment)
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
-if not MCP_SERVER_URL:
-    raise ValueError("MCP_SERVER_URL environment variable is required")
+# MCP Configuration (required: set ADMIN_MCP_SERVER in .env or environment)
+ADMIN_MCP_SERVER = os.getenv("ADMIN_MCP_SERVER")
+if not ADMIN_MCP_SERVER:
+    raise ValueError("ADMIN_MCP_SERVER environment variable is required")
 async def mcp_chat(query: str):
     """Chat with the MCP server to get Tableau insights"""
     print(f"🚀 MCP Analysis Started")
@@ -31,7 +31,7 @@ async def mcp_chat(query: str):
             # Get available tools first
             print("📋 Getting available tools...")
             tools_response = await session.post(
-                f"{MCP_SERVER_URL}/",
+                f"{ADMIN_MCP_SERVER}/",
                 json={
                     "jsonrpc": "2.0",
                     "method": "tools/list",
@@ -73,7 +73,7 @@ async def mcp_chat(query: str):
             # Step 1: List workbooks to find Superstore
             print("📚 Step 1: Finding Superstore workbook...")
             list_workbooks_response = await session.post(
-                f"{MCP_SERVER_URL}/",
+                f"{ADMIN_MCP_SERVER}/",
                 json={
                     "jsonrpc": "2.0",
                     "method": "tools/call",
@@ -120,7 +120,7 @@ async def mcp_chat(query: str):
             # Step 2: Get workbook details to find Overview view
             print(f"📋 Step 2: Getting workbook details for {workbook_id}...")
             get_workbook_response = await session.post(
-                f"{MCP_SERVER_URL}/",
+                f"{ADMIN_MCP_SERVER}/",
                 json={
                     "jsonrpc": "2.0",
                     "method": "tools/call",
@@ -165,7 +165,7 @@ async def mcp_chat(query: str):
             # Step 3: Get the Overview sheet image
             print(f"🖼️ Step 3: Getting Overview sheet image for view {overview_view_id}...")
             get_image_response = await session.post(
-                f"{MCP_SERVER_URL}/",
+                f"{ADMIN_MCP_SERVER}/",
                 json={
                     "jsonrpc": "2.0",
                     "method": "tools/call",

@@ -1,6 +1,6 @@
 """
-Simple MCP + LangChain web application for Tableau
-Using HTTP MCP client like the e-bikes demo
+Admin Web Application for Tableau Cloud User and Group Management
+Using HTTP MCP client for admin operations
 """
 
 import os
@@ -19,8 +19,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
 
-# Import our HTTP MCP integration
-from utilities.langchain_mcp import tableau_mcp_chat
+# Import our Admin MCP integration
+from utilities.admin_agent import admin_mcp_chat
 
 # Request/Response models
 class ChatRequest(BaseModel):
@@ -34,8 +34,8 @@ class ChatResponse(BaseModel):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Tableau MCP Chat",
-    description="Simple HTTP MCP integration for Tableau data analysis"
+    title="Tableau Admin Portal",
+    description="Admin agent for managing Tableau Cloud users and groups via MCP"
 )
 
 # Add CORS middleware
@@ -63,83 +63,84 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "tableau-mcp-chat",
-        "version": "1.0.0"
+        "service": "tableau-admin-portal",
+        "version": "1.0.0",
+        "capabilities": [
+            "user-management",
+            "group-management"
+        ]
     }
 
 @app.get("/system-prompt")
 async def get_system_prompt():
-    """Get system prompt for display in UI - matches e-bikes demo pattern"""
-    from utilities.langchain_mcp import TABLEAU_SYSTEM_PROMPT
+    """Get admin system prompt for display in UI"""
+    from utilities.admin_agent import ADMIN_SYSTEM_PROMPT
     return {
-        "systemPrompt": TABLEAU_SYSTEM_PROMPT
+        "systemPrompt": ADMIN_SYSTEM_PROMPT
     }
 
 @app.post("/mcp-chat")
 async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:
-    """MCP chat endpoint (non-streaming) - matches e-bikes demo pattern"""
+    """Admin chat endpoint (non-streaming)"""
     try:
-        print(f"💬 MCP Chat request: {request.message}")
-        
-        # Process with MCP
-        result = await tableau_mcp_chat(
+        print(f"🔐 Admin Chat request: {request.message}")
+
+        # Process with Admin MCP Agent
+        result = await admin_mcp_chat(
             query=request.message,
             conversation_history=request.history
         )
-        
+
         return ChatResponse(
             response=result["response"],
             tool_results=result["tool_results"],
             iterations=result["iterations"]
         )
-        
+
     except Exception as e:
-        print(f"❌ MCP Chat error: {str(e)}")
+        print(f"❌ Admin Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/mcp-chat-stream")
 async def mcp_chat_stream_endpoint(request: ChatRequest):
-    """MCP chat streaming endpoint with user-friendly progress"""
-    
+    """Admin chat streaming endpoint with progress updates"""
+
     async def generate_stream():
         try:
             # Send initial progress
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Connection established\", \"step\": \"init\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Admin agent initialized\", \"step\": \"init\"}}\n\n"
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Starting analysis...\", \"step\": \"analysis-start\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Connecting to admin MCP server...\", \"step\": \"connect\"}}\n\n"
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Connecting to Tableau MCP server...\", \"step\": \"mcp-connect\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Loading admin tools (user & group management)...\", \"step\": \"load-tools\"}}\n\n"
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Discovering available data analysis tools...\", \"step\": \"discover-tools\"}}\n\n"
-            
-            yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Analyzing your question and planning data exploration...\", \"step\": \"planning\"}}\n\n"
-            
-            # Process with MCP
-            result = await tableau_mcp_chat(
+            yield f"data: {{\"message\": \"Processing admin request...\", \"step\": \"processing\"}}\n\n"
+
+            # Process with Admin MCP Agent
+            result = await admin_mcp_chat(
                 query=request.message,
                 conversation_history=request.history
             )
-            
+
             # Send final result
             yield f"event: result\n"
             yield f"data: {json.dumps(result)}\n\n"
-            
+
             yield f"event: done\n"
-            yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Admin operation complete\"}}\n\n"
+
         except Exception as e:
             error_msg = str(e)
-            print(f"❌ Stream error: {error_msg}")
-            
-            # Send error as a result so the UI can display it properly
+            print(f"❌ Admin stream error: {error_msg}")
+
+            # Send error as a result
             yield f"event: result\n"
-            yield f"data: {json.dumps({'response': f'Error: {error_msg}', 'tool_results': [], 'iterations': 0, 'error': True})}\n\n"
-            
+            yield f"data: {json.dumps({'response': f'Admin operation failed: {error_msg}', 'tool_results': [], 'iterations': 0, 'error': True})}\n\n"
+
             yield f"event: done\n"
             yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
     
@@ -155,14 +156,14 @@ async def mcp_chat_stream_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    print("🚀 Starting Tableau MCP Chat Server")
-    print("📊 Using HTTP MCP client for hosted server")
-    
+
+    print("🔐 Starting Tableau Admin Portal")
+    print("📊 Admin operations: User & Group Management")
+
     port = int(os.getenv("PORT", 8000))
     # Disable reload in production (Railway sets RAILWAY_ENVIRONMENT)
     reload = os.getenv("RAILWAY_ENVIRONMENT") is None
-    
+
     uvicorn.run(
         "web_app:app",
         host="0.0.0.0",

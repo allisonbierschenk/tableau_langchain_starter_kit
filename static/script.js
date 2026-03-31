@@ -96,10 +96,9 @@ async function sendMessage() {
         const controller = new AbortController();
         currentStream = controller;
 
-        // Always use MCP/Analyst Agent endpoint
-        console.log(`Using MCP/Analyst Agent for: "${message}"`);
+        // Always use Admin Agent endpoint
+        console.log(`Using Admin Agent for: "${message}"`);
 
-        // Don't show thinking bubble immediately - wait for "planning" step
         console.log('Calling handleMCPRequest');
         fullResponse = await handleMCPRequest(message, controller, botMessageId);
         console.log('handleMCPRequest completed, response:', fullResponse);
@@ -149,12 +148,12 @@ async function handleMCPRequest(message, controller, botMessageId) {
     try {
         const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
             method: 'POST',
-            headers: { 
+            headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
                 'X-Session-ID': generateSessionId()
             },
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, history: conversationHistory }),
             signal: controller.signal
         });
 
@@ -193,10 +192,9 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
     let isComplete = false;
     let timeoutId = null;
 
-    // Keep thinking indicator visible - it will stay until we get actual results
-    // Create progress indicator for MCP (shows detailed progress alongside thinking bubble)
-    const progressId = 'mcp-progress-' + Date.now();
-    progressDiv = addMessage('<div class="mcp-progress"><em>Initializing advanced analysis...</em></div>', 'bot', progressId);
+    // Create progress indicator for admin operations
+    const progressId = 'admin-progress-' + Date.now();
+    progressDiv = addMessage('<div class="admin-progress"><em>Initializing...</em></div>', 'bot', progressId);
     
     // Create bot message div but hide it until we have content
     let botMessageDiv = addMessage('', 'bot', botMessageId);
@@ -289,8 +287,8 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             console.log('Result event, fullResponse:', fullResponse);
                             console.log('Tool results for datasource extraction:', window.lastToolResults);
                             if (fullResponse) {
-                                // Enhanced formatting for MCP results with datasource info
-                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse, window.lastToolResults);
+                                // Format admin response
+                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse, eventData.tool_results);
                                 // Show the message div now that we have content
                                 botMessageDiv.style.display = '';
                             }
@@ -299,12 +297,6 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             if (progressDiv) {
                                 progressDiv.remove();
                                 progressDiv = null;
-                            }
-                            
-                            // Auto-display dashboard image if user requested it
-                            if (originalMessage && shouldDisplayDashboardImage(originalMessage)) {
-                                console.log('Auto-displaying dashboard image based on user request');
-                                setTimeout(() => displayDashboardImage(), 500);
                             }
                             // Mark as complete but continue to wait for done event
                             isComplete = true;
@@ -350,45 +342,10 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
     }
 }
 
-// --- Handle MCP Progress Events ---
+// --- Handle Admin Progress Events ---
 function handleMCPProgressEvent(eventData, progressDiv) {
     if (eventData.message) {
-        let userFriendlyMessage = eventData.message;
-        
-        // Convert technical messages to user-friendly ones
-        if (eventData.step === 'discover-tools') {
-            userFriendlyMessage = "Discovering available data analysis tools...";
-        } else if (eventData.step === 'tools-discovered') {
-            userFriendlyMessage = `Found ${eventData.tools ? eventData.tools.length : 0} analysis tools ready to use`;
-        } else if (eventData.step === 'iteration') {
-            userFriendlyMessage = `Thinking through your question (Step ${eventData.iteration || 1})...`;
-        } else if (eventData.step === 'executing-tools') {
-            userFriendlyMessage = `Analyzing your data (${eventData.tool_count || 1} analysis step${eventData.tool_count > 1 ? 's' : ''})...`;
-        } else if (eventData.step === 'tool-executing') {
-            if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "Exploring available data sources...";
-            } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "Examining data structure and available fields...";
-            } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "Querying data to find insights...";
-            } else {
-                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}...`;
-            }
-        } else if (eventData.step === 'tool-completed') {
-            if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "Data sources identified";
-            } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "Data structure analyzed";
-            } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "Data query completed";
-            } else {
-                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} completed`;
-            }
-        } else if (eventData.step === 'final-response') {
-            userFriendlyMessage = "Preparing your personalized insights...";
-        }
-        
-        progressDiv.innerHTML = `<div class="mcp-progress" data-step="${eventData.step || 'default'}"><em>${userFriendlyMessage}</em></div>`;
+        progressDiv.innerHTML = `<div class="admin-progress"><em>${eventData.message || 'Processing...'}</em></div>`;
     }
 }
 
@@ -397,31 +354,21 @@ function getMCPProgressIcon(step) {
     return '';
 }
 
-// --- Enhanced Response Formatting for MCP Results ---
+// --- Admin Response Formatting ---
 function formatMCPResponse(text, toolResults = null) {
     if (!text) return '';
-    
+
     let formatted = text
         .replace(/\n/g, '<br>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // **bold**
-        .replace(/\*(.*?)\*/g, '<em>$1</em>') // *italic*
-        .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
-        .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code>$1</code>');
 
-    // Add datasource information if available
-    if (toolResults && toolResults.length > 0) {
-        const datasources = extractDatasourceNames(toolResults);
-        console.log('Datasources:', datasources);
-        console.log('Tool Results:', toolResults);
-        if (datasources.length > 0) {
-            formatted += '<br><br><div class="datasource-info"><strong>Data Sources Used:</strong> ' + datasources.join(', ') + '</div>';
-        }
-    }
+    // Highlight admin operations
+    formatted = formatted.replace(/✓/g, '<span style="color: #10b981;">✓</span>');
+    formatted = formatted.replace(/✗/g, '<span style="color: #ef4444;">✗</span>');
+    formatted = formatted.replace(/⚠️/g, '<span style="color: #f59e0b;">⚠️</span>');
 
-    // Enhanced formatting for data tables and insights
-    formatted = formatDataTables(formatted);
-    formatted = formatInsightBoxes(formatted);
-    
     return formatted;
 }
 
@@ -672,5 +619,5 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // Show ready message
-    addMessage("<strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
+    addMessage('<div style="background-color: #f0f9ff; border-left: 3px solid #0066cc; padding: 10px;"><strong>Ready!</strong> You can now ask me about user and group management operations.</div>', "bot");
 });

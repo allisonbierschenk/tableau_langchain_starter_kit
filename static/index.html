@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Tableau AI Chat</title>
+    <title>Tableau Admin Portal</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
@@ -25,22 +25,34 @@
     <div id="chatContainer" class="chat-container-visible">
         <div class="container">
             <header>
-                <h1>Conversational Analytics</h1>
+                <h1>🔐 Tableau Admin Portal</h1>
+                <p style="font-size: 0.9em; color: #666; margin-top: -10px;">User & Group Management</p>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    Hello! I can help you explore your Tableau data sources and provide insights.
+                    👋 Welcome to the Tableau Admin Portal! I can help you manage users and groups on your Tableau Cloud site.
                     <br><br>
-                    Try asking:
-                    <br>• "What data sources do I have access to?"
-                    <br>• "List the fields in the databricks superstore datasource"
-                    <br>• "Show me the top 2 insights"
+                    <strong>Try asking:</strong>
+                    <br><br>
+                    <strong>User Management:</strong>
+                    <br>• "List all users on the site"
+                    <br>• "Add a new user [user-email] with Creator role"
+                    <br>• "Update user [user-email] to Viewer role"
+                    <br>• "Show me all users with Explorer role"
+                    <br><br>
+                    <strong>Group Management:</strong>
+                    <br>• "List all groups"
+                    <br>• "Create a new group called 'Data Analysts'"
+                    <br>• "Add user [user-email] to the Marketing group"
+                    <br>• "Show me all users in the Sales group"
+                    <br><br>
+                    <em>Note: I specialize in user and group management only.</em>
                 </div>
             </div>
 
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type your question here..." autocomplete="off">
+                <input type="text" id="messageInput" placeholder="Ask about users or groups..." autocomplete="off">
                 <button type="button" id="sendBtn">Send</button>
             </div>
         </div>
