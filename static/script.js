@@ -1,13 +1,154 @@
 // script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
 // Configuration - Set your deployed backend URL here
-const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-    ? 'http://localhost:8000' 
+const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:8000'
     : 'https://mcpagent.up.railway.app');
 
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
 let sessionId = null; // Track session ID for better client-server communication
+let currentUser = null; // Track authenticated user
+
+// --- Authentication Functions ---
+
+// Check authentication status on page load
+async function checkAuthStatus() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/auth/status`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+
+        if (data.authenticated && data.is_admin) {
+            currentUser = data;
+            showChatInterface();
+            updateUserInfo(data);
+        } else {
+            showLoginInterface();
+        }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        showLoginInterface();
+    }
+}
+
+// Show login interface
+function showLoginInterface() {
+    document.getElementById('loginContainer').style.display = 'flex';
+    document.getElementById('chatContainer').style.display = 'none';
+}
+
+// Show chat interface
+function showChatInterface() {
+    document.getElementById('loginContainer').style.display = 'none';
+    document.getElementById('chatContainer').style.display = 'block';
+}
+
+// Update user info display
+function updateUserInfo(user) {
+    const userInfoEl = document.getElementById('userInfo');
+    if (userInfoEl && user) {
+        userInfoEl.textContent = `${user.user_name} (${user.site_role})`;
+    }
+}
+
+// Handle login
+async function handleLogin() {
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const loginBtn = document.getElementById('loginBtn');
+    const errorDiv = document.getElementById('loginError');
+
+    if (!username || !password) {
+        errorDiv.textContent = 'Please enter both email and password';
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    // Update UI
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Signing in...';
+    errorDiv.style.display = 'none';
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/login`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+                username: username,
+                password: password,
+                use_pat: false
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success && data.is_admin) {
+            currentUser = data;
+            showChatInterface();
+            updateUserInfo(data);
+        } else {
+            errorDiv.textContent = data.message || 'Authentication failed';
+            errorDiv.style.display = 'block';
+        }
+    } catch (error) {
+        errorDiv.textContent = `Connection error: ${error.message}`;
+        errorDiv.style.display = 'block';
+    } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Sign In';
+    }
+}
+
+// Handle logout
+async function handleLogout() {
+    try {
+        await fetch(`${API_BASE_URL}/logout`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
+
+    currentUser = null;
+    conversationHistory = [];
+    showLoginInterface();
+
+    // Clear form
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+}
+
+// Initialize auth on page load
+document.addEventListener('DOMContentLoaded', () => {
+    checkAuthStatus();
+
+    // Login form handlers
+    const loginBtn = document.getElementById('loginBtn');
+    const loginPassword = document.getElementById('loginPassword');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    if (loginBtn) {
+        loginBtn.addEventListener('click', handleLogin);
+    }
+
+    if (loginPassword) {
+        loginPassword.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleLogin();
+            }
+        });
+    }
+
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', handleLogout);
+    }
+});
 
 // Generate a session ID for this client
 function generateSessionId() {

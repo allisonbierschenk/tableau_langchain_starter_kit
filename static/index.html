@@ -21,33 +21,58 @@
     <script src="static/script.js" defer></script>
 </head>
 <body>
-    <!-- Chat Container -->
-    <div id="chatContainer" class="chat-container-visible">
+    <!-- Login Container -->
+    <div id="loginContainer" class="login-container">
+        <div class="login-box">
+            <div class="login-header">
+                <h1>Tableau Admin Portal</h1>
+                <p>Sign in with your Tableau credentials</p>
+            </div>
+
+            <div class="login-form">
+                <div class="form-group">
+                    <label for="loginUsername">Email</label>
+                    <input type="text" id="loginUsername" placeholder="your.email@company.com" autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" placeholder="Enter your password" autocomplete="current-password">
+                </div>
+
+                <div id="loginError" class="login-error" style="display: none;"></div>
+
+                <button type="button" id="loginBtn" class="login-button">
+                    Sign In
+                </button>
+
+                <div class="login-info">
+                    <strong>Admin Access Required</strong>
+                    <p>Only Site Administrators can access this portal</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Container (hidden initially) -->
+    <div id="chatContainer" class="chat-container" style="display: none;">
         <div class="container">
             <header>
-                <h1>🔐 Tableau Admin Portal</h1>
-                <p style="font-size: 0.9em; color: #666; margin-top: -10px;">User & Group Management</p>
+                <h1>Tableau Admin Portal</h1>
+                <p>User & Group Management <span id="userInfo" style="margin-left: 8px;"></span></p>
+                <button id="logoutBtn" class="logout-button">Logout</button>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    👋 Welcome to the Tableau Admin Portal! I can help you manage users and groups on your Tableau Cloud site.
+                    <strong>Welcome!</strong> Ask me to manage users and groups on your Tableau site.
                     <br><br>
-                    <strong>Try asking:</strong>
-                    <br><br>
-                    <strong>User Management:</strong>
-                    <br>• "List all users on the site"
-                    <br>• "Add a new user [user-email] with Creator role"
-                    <br>• "Update user [user-email] to Viewer role"
-                    <br>• "Show me all users with Explorer role"
-                    <br><br>
-                    <strong>Group Management:</strong>
-                    <br>• "List all groups"
-                    <br>• "Create a new group called 'Data Analysts'"
-                    <br>• "Add user [user-email] to the Marketing group"
-                    <br>• "Show me all users in the Sales group"
-                    <br><br>
-                    <em>Note: I specialize in user and group management only.</em>
+                    Examples:
+                    <br>• List all users
+                    <br>• Add user@email.com as a Creator
+                    <br>• Show all groups
+                    <br>• Remove users with @domain.com
+                    <br>• Add user@email.com to Sales group
                 </div>
             </div>
 
