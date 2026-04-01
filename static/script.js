@@ -226,7 +226,7 @@ async function sendMessage() {
     const sendBtn = document.getElementById('sendBtn');
     input.disabled = true;
     sendBtn.disabled = true;
-    sendBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
+    sendBtn.innerHTML = '<span class="spinner"></span> Processing...';
 
     const botMessageId = 'bot-response-' + Date.now();
     let fullResponse = '';

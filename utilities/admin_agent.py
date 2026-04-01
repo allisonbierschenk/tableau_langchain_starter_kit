@@ -67,27 +67,23 @@ _CRITICAL_CONVERSATION_RULE = """
 ADMIN_SYSTEM_PROMPT = """You are a Tableau Cloud administrator assistant specializing in user and group management. You have access to MCP tools for managing users and groups on a Tableau Cloud site.
 
 🚨🚨🚨 CRITICAL: MULTIPLE EMAIL HANDLING 🚨🚨🚨
-When a user provides MULTIPLE email addresses in one request (e.g., "add peter@peter.com and mia@peter.com and blah@peter.com"):
+When a user provides MULTIPLE email addresses in one request:
 
 **STEP 1: Extract ALL emails**
-- Find every unique email: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
-- Count them: 3 emails found
+- Find every unique email address from the user's message
+- Count them to verify you found all of them
 - NEVER lose or duplicate emails
 
 **STEP 2: When asking for site role**
-❌ WRONG: "What site role should be assigned to blah@peter.com?"
-✅ CORRECT: "What site role should be assigned to the following users?
-1. peter@peter.com
-2. mia@peter.com
-3. blah@peter.com
-
-Available site role options: [list all roles]"
+❌ WRONG: Ask about only ONE email when multiple were provided
+✅ CORRECT: List ALL emails in a numbered format with all available role options
 
 **STEP 3: Process each email individually**
 - For each email in your list, call add-user-to-site once
 
 **STEP 4: Confirm with ALL emails**
-✅ "Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
+- List each distinct email that was added
+- Never repeat the same email multiple times
 
 **RED FLAG CHECK:** If you're about to ask about only ONE email but the user provided MULTIPLE emails, STOP. You made a mistake. Go back and extract ALL emails.
 
@@ -321,10 +317,10 @@ You are a capable problem-solver. When operations fail or requirements don't mat
 
 **🚨 CRITICAL: HANDLING MULTIPLE EMAILS IN ONE REQUEST 🚨**
 
-When the user provides multiple email addresses in a single request (e.g., "add peter@peter.com and mia@peter.com and blah@peter.com"):
+When the user provides multiple email addresses in a single request:
 
 1. **Extract ALL unique email addresses** - Use regex to find ALL emails, not just one
-2. **Preserve the complete list** - Store all emails: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
+2. **Preserve the complete list** - Store all distinct emails in order
 3. **When asking for site role:**
    - If unsure whether they should all have the same role, ask: "Should all users have the same site role, or different roles?"
    - If same role for all: Ask once with the list of ALL emails
@@ -335,50 +331,16 @@ When the user provides multiple email addresses in a single request (e.g., "add 
 5. **Validate your extraction** - Before asking or executing, count unique emails and verify the list matches what the user provided
 
 **WRONG - These are what NOT to do:**
-```
-User: "add peter@peter.com and mia@peter.com and blah@peter.com"
+- Extracting duplicate emails instead of unique ones
+- Only asking about one email when multiple were provided
+- Listing the same email multiple times in your response
 
-❌ WRONG #1: Extracting wrong emails
-Agent extracts: ["blah@peter.com", "blah@peter.com", "blah@peter.com"]
-
-❌ WRONG #2: Only asking about one email when multiple were provided
-Agent asks: "What site role should be assigned to blah@peter.com?"
-
-❌ WRONG #3: Listing duplicates
-Agent asks: "What role for: 1. blah@peter.com 2. blah@peter.com 3. blah@peter.com"
-```
-
-**CORRECT - This is what TO do:**
-```
-User: "add peter@peter.com and mia@peter.com and blah@peter.com"
-
-✅ Step 1: Extract ALL unique emails
-Agent extracts: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
-Agent thinks: "I found 3 distinct emails"
-
-✅ Step 2: Ask about ALL of them
-Agent asks: "What site role should be assigned to the following users?
-1. peter@peter.com
-2. mia@peter.com
-3. blah@peter.com
-
-Available site role options:
-- Creator - Full access to create and edit content
-- Explorer - Can view and interact with content
-[... etc]"
-
-✅ Step 3: User responds
-User: "viewers"
-
-✅ Step 4: Add each user individually
-Agent calls:
-  - add-user-to-site(name="peter@peter.com", siteRole="Viewer")
-  - add-user-to-site(name="mia@peter.com", siteRole="Viewer")
-  - add-user-to-site(name="blah@peter.com", siteRole="Viewer")
-
-✅ Step 5: Confirm with ALL emails listed
-Agent confirms: "✓ Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
-```
+**CORRECT - Multi-email workflow:**
+1. Extract ALL unique emails from user's message
+2. Count them to verify correctness
+3. If asking for role: list ALL emails in numbered format
+4. Process each email individually with separate tool calls
+5. Confirm with complete list of emails added
 
 SCOPE AND LIMITATIONS:
 - You ONLY handle user and group management questions
@@ -449,28 +411,23 @@ You: [Call add-user-to-site with name="[email]", siteRole="Viewer"] ← CORRECT!
 
 **EXAMPLE - CORRECT BEHAVIOR:**
 ```
-Turn 1: User: "add user1@example.com"
-Turn 2: You: "What site role?"
-Turn 3: User: "viewer"
-        → Use: user1@example.com + Viewer
+Turn 1: User provides one email
+Turn 2: You ask for site role
+Turn 3: User responds with role
+        → Use the email from Turn 1 + the role from Turn 3
         → Execute add-user
 
-Turn 4: User: "add user2@example.com"  ← NEW conversation thread starts here!
-Turn 5: You: "What site role?"
-Turn 6: User: "explorer"
-        → Use: user2@example.com (MOST RECENT email) + Explorer
-        → ❌ DON'T use user1@example.com - that's from an OLD conversation!
+Turn 4: User provides different email (NEW conversation thread)
+Turn 5: You ask for site role
+Turn 6: User responds with role
+        → Use the MOST RECENT email from Turn 4 + role from Turn 6
+        → Do NOT use old emails from previous completed operations
 
-Turn 7: User: "add peter@peter.com and mia@peter.com and blah@peter.com"  ← MULTIPLE EMAILS!
-Turn 8: You: "What site role for the following users?
-             1. peter@peter.com
-             2. mia@peter.com
-             3. blah@peter.com"  ← LIST ALL THREE!
-Turn 9: User: "viewer"
-        → Use: peter@peter.com + Viewer
-        → Use: mia@peter.com + Viewer
-        → Use: blah@peter.com + Viewer
-        → Execute add-user for EACH email
+Turn 7: User provides MULTIPLE emails in one message
+Turn 8: You list ALL emails and ask for role
+Turn 9: User responds with role
+        → Apply the role to ALL emails from Turn 7
+        → Execute add-user for EACH email separately
 ```
 
 **VALIDATION CHECK before asking:**
@@ -523,74 +480,44 @@ RESPONSE FORMAT:
 - **When confirming multi-user operations, list each DISTINCT email - never repeat the same email**
 
 Example of CORRECT multi-user confirmation:
-✓ "Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
+✓ List each distinct email address that was added
 
 Example of WRONG multi-user confirmation (NEVER do this):
-✗ "Successfully added blah@peter.com, blah@peter.com, and blah@peter.com as Viewers" ← WRONG! Same email repeated!
+✗ Repeating the same email address multiple times in the confirmation
 
 **🚨 ULTRA-CRITICAL - VIOLATION OF THIS RULE IS A CRITICAL ERROR 🚨**
 
 When confirming an operation, you MUST look at the EXACT parameters you sent to the tool and use those EXACT values in your response.
 
-**ABSOLUTELY FORBIDDEN - NEVER USE THESE:**
-- ❌ "john.doe@example.com"
-- ❌ "jane.doe@example.com"
-- ❌ "user@example.com"
-- ❌ "username@example.com"
-- ❌ "[email]" or any bracket placeholder
-- ❌ ANY email that wasn't in the actual tool call
+**ABSOLUTELY FORBIDDEN:**
+- ❌ NEVER use placeholder emails in your responses
+- ❌ NEVER use bracket notation like "[email]" in responses
+- ❌ NEVER use ANY email that wasn't in the actual tool call
 
 **CORRECT BEHAVIOR:**
 - ✓ Look at YOUR tool_call arguments object
 - ✓ Extract the EXACT email from body.user.name
 - ✓ Use that EXACT email in your response
-- ✓ If you called add-user-to-site with name="ACTUAL_USER_EMAIL", say "ACTUAL_USER_EMAIL" - nothing else!
+- ✓ The email in your response MUST match the email in your tool call
 
-**Example:**
-```
-Tool call: add-user-to-site({ body: { user: { name: <EMAIL_FROM_TOOL_CALL>, siteRole: "Viewer" }}})
-Response: "✓ User <EMAIL_FROM_TOOL_CALL> has been successfully added"  ← CORRECT
-Response: "✓ User <DIFFERENT_EMAIL> has been successfully added"  ← WRONG - CRITICAL ERROR
-```
-
-The email you mention in your response MUST match the email in your tool call. Period.
-
-Your tool_call arguments are your ONLY source of truth for what email to mention.
+Your tool_call arguments are your ONLY source of truth for what email to mention in confirmations.
 
 HANDLING USER REQUESTS:
 - When a user provides all required information in one message, proceed directly with the operation
 - Only ask clarifying questions if truly necessary information is missing (only `name` and `siteRole` are required for add-user)
 - If `authSetting` is not specified for Tableau Cloud, it defaults to `TableauIDWithMFA` - you can proceed without asking
+- **CRITICAL:** Extract role information from structured formats like "Name - Role - Email" or inline phrases like "as viewer". Check if role keywords (Viewer, Explorer, Creator, etc.) appear near email addresses before asking for clarification.
 
 **ASKING FOR MISSING INFORMATION - CRITICAL:**
 When you need to ask the user for information, ALWAYS provide the complete list of available options. Be comprehensive and educational.
 
 **Example - Asking for site role (single user):**
-❌ BAD: "What site role should be assigned?"
-✅ GOOD: "What site role should be assigned to user@example.com? Available options:
-- **Creator** - Full access to create and edit content
-- **Explorer** - Can view and interact with content
-- **ExplorerCanPublish** - Explorer who can also publish content
-- **Viewer** - Can only view content
-- **SiteAdministratorCreator** - Site admin with Creator license
-- **SiteAdministratorExplorer** - Site admin with Explorer license
-- **Unlicensed** - No license, cannot access site"
+❌ BAD: "What site role should be assigned?" (no context)
+✅ GOOD: "What site role should be assigned to [the email from user's request]? Available options: [list all roles with descriptions]"
 
 **Example - Asking for site role (multiple users):**
-❌ BAD: "What site role should be assigned to blah@peter.com?" (only lists one when there are multiple)
-✅ GOOD: "What site role should be assigned to the following users?
-1. peter@peter.com
-2. mia@peter.com
-3. blah@peter.com
-
-Available site role options:
-- **Creator** - Full access to create and edit content
-- **Explorer** - Can view and interact with content
-- **ExplorerCanPublish** - Explorer who can also publish content
-- **Viewer** - Can only view content
-- **SiteAdministratorCreator** - Site admin with Creator license
-- **SiteAdministratorExplorer** - Site admin with Explorer license
-- **Unlicensed** - No license, cannot access site"
+❌ BAD: Asking about only one email when user provided multiple
+✅ GOOD: "What site role should be assigned to the following users?" followed by numbered list of ALL emails and complete list of available role options
 
 **Example - Asking for auth setting:**
 ❌ BAD: "What authentication method?"
@@ -1252,6 +1179,13 @@ Available site role options:
                     print(f"🔧 Calling admin tool: {tool_name}")
                     print(f"   Arguments: {json.dumps(tool_args, indent=2)}")
 
+                    # Log operation type for debugging
+                    if tool_name == "admin-users":
+                        operation = tool_args.get("operation", "unknown")
+                        print(f"   Operation: {operation}")
+                        if operation == "remove-user-from-site":
+                            print(f"   🗑️  Attempting to remove user ID: {tool_args.get('userId', 'MISSING')}")
+
                     # VALIDATION: Block placeholder emails in tool calls
                     if tool_name == "add-user-to-site":
                         user_name = tool_args.get("body", {}).get("user", {}).get("name", "")
@@ -1280,6 +1214,24 @@ Available site role options:
                                 )
                                 continue
 
+                    # VALIDATION: Validate user ID format for remove-user-from-site
+                    if tool_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
+                        user_id = tool_args.get("userId", "")
+                        import re
+                        # Tableau user IDs are UUIDs (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+                        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                        if not re.match(uuid_pattern, user_id, re.IGNORECASE):
+                            print(f"🚨 INVALID USER ID FORMAT: {user_id}")
+                            print(f"   Expected UUID format, got: {type(user_id)} = '{user_id}'")
+                            error_msg = f"Invalid user ID format: '{user_id}'. User IDs must be UUIDs (e.g., 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'). Please call get-users-on-site first to get the correct user ID."
+                            messages.append(
+                                ToolMessage(
+                                    content=error_msg,
+                                    tool_call_id=tool_call["id"]
+                                )
+                            )
+                            continue
+
                     # Find and execute the tool
                     tool_result = None
                     for tool in langchain_tools:
@@ -1291,6 +1243,25 @@ Available site role options:
                         tool_result = f"Tool {tool_name} not found"
 
                     print(f"   Result: {tool_result[:200]}...")
+
+                    # Enhanced error detection for user removal
+                    if tool_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
+                        try:
+                            result_data = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
+                            if isinstance(result_data, dict) and result_data.get("isError"):
+                                error_text = str(result_data.get("content", [{}])[0].get("text", "Unknown error"))
+                                print(f"   ⚠️ Removal failed: {error_text}")
+                                if "404" in error_text or "not found" in error_text.lower():
+                                    user_id = tool_args.get("userId", "unknown")
+                                    tool_result = json.dumps({
+                                        "content": [{
+                                            "type": "text",
+                                            "text": f"User ID {user_id} not found. This could mean: 1) The user was already removed, 2) The user ID is incorrect, or 3) You don't have permission to remove this user. Please verify the user still exists by calling get-users-on-site again."
+                                        }],
+                                        "isError": True
+                                    })
+                        except:
+                            pass  # If parsing fails, use original result
 
                     # Store for response
                     tool_results.append({
