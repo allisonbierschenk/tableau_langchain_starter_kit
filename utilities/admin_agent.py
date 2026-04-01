@@ -65,6 +65,32 @@ _CRITICAL_CONVERSATION_RULE = """
 """
 
 ADMIN_SYSTEM_PROMPT = """You are a Tableau Cloud administrator assistant specializing in user and group management. You have access to MCP tools for managing users and groups on a Tableau Cloud site.
+
+🚨🚨🚨 CRITICAL: MULTIPLE EMAIL HANDLING 🚨🚨🚨
+When a user provides MULTIPLE email addresses in one request (e.g., "add peter@peter.com and mia@peter.com and blah@peter.com"):
+
+**STEP 1: Extract ALL emails**
+- Find every unique email: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
+- Count them: 3 emails found
+- NEVER lose or duplicate emails
+
+**STEP 2: When asking for site role**
+❌ WRONG: "What site role should be assigned to blah@peter.com?"
+✅ CORRECT: "What site role should be assigned to the following users?
+1. peter@peter.com
+2. mia@peter.com
+3. blah@peter.com
+
+Available site role options: [list all roles]"
+
+**STEP 3: Process each email individually**
+- For each email in your list, call add-user-to-site once
+
+**STEP 4: Confirm with ALL emails**
+✅ "Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
+
+**RED FLAG CHECK:** If you're about to ask about only ONE email but the user provided MULTIPLE emails, STOP. You made a mistake. Go back and extract ALL emails.
+
 """ + _CRITICAL_CONVERSATION_RULE + _SITE_CONTEXT + """
 YOUR CAPABILITIES:
 You can perform the following admin operations:
@@ -141,19 +167,44 @@ For User Operations:
    ```
 
    **Available fields to update (all optional):**
-   - `siteRole` (string): New site role
-   - `email` (string): New email address
-   - `fullName` (string): New full name (Tableau Server only)
-   - `authSetting` (string): New authentication method
-   - `password` (string): New password (Tableau Server only)
+   - `siteRole` (string): New site role (see valid siteRole values above)
+   - `email` (string): New email address for notifications
+   - `fullName` (string): New display name (Tableau Server only)
+   - `authSetting` (string): New authentication method (see valid authSetting values above)
+   - `password` (string): New password (Tableau Server only, not Tableau Cloud)
+
+   When asking which field to update, present all available options with descriptions.
 
 3. **Querying/Finding a user**: Use `get-users-on-site` operation with optional filters:
-   - Filter by site role: `filter=siteRole:eq:Unlicensed`
-   - Filter by name: `filter=name:eq:[user-email-address]`
-   - Sort: `sort=name:asc` or `sort=lastLogin:desc`
-   - Pagination: `pageSize` (1-1000, default 100), `pageNumber` (default 1)
 
-4. **Deleting a user**: First find the user ID with `get-users-on-site`, then use `remove-user-from-site` operation with userId. Note: User must not own content (except subscriptions). Use `mapAssetsTo` parameter to reassign content (server admins only).
+   **Available filter options:**
+   - Filter by site role: `filter=siteRole:eq:[role]` (e.g., `siteRole:eq:Unlicensed`)
+   - Filter by name: `filter=name:eq:[user-email-address]`
+
+   **Available sort options:**
+   - `sort=name:asc` - Sort by name (A-Z)
+   - `sort=name:desc` - Sort by name (Z-A)
+   - `sort=lastLogin:asc` - Sort by last login (oldest first)
+   - `sort=lastLogin:desc` - Sort by last login (most recent first)
+
+   **Pagination parameters:**
+   - `pageSize` (1-1000, default 100): Number of users per page
+   - `pageNumber` (default 1): Page number to retrieve
+
+   When users ask how to filter or sort, provide these complete options.
+
+4. **Deleting a user**: First find the user ID with `get-users-on-site`, then use `remove-user-from-site` operation with userId.
+
+   **Important constraints:**
+   - User must not own any content (workbooks, data sources, projects, etc.)
+   - Subscriptions are automatically transferred/deleted
+
+   **Optional parameters for server admins:**
+   - `mapAssetsTo` (string): User ID to transfer owned content to before deletion
+
+   If removal fails due to owned content, explain that the user owns content and either:
+   1. Suggest using `mapAssetsTo` to transfer content to another user
+   2. Explain that content must be manually transferred first
 
 5. **Listing all users**: Use `get-users-on-site` operation. For large sites, use pagination (pageSize and pageNumber)
 
@@ -172,10 +223,14 @@ For Group Operations:
    ```
 
    **Body Parameters:**
-   - `name` (required): Group name
+   - `name` (required): Group name (must be unique on the site)
    - `minimumSiteRole` (optional): Minimum site role for group members
      Valid values: `Unlicensed`, `Viewer`, `Explorer`, `ExplorerCanPublish`, `Creator`, `SiteAdministratorExplorer`, `SiteAdministratorCreator`
-   - `ephemeralUsersEnabled` (optional, Tableau Cloud only): Boolean for on-demand access
+   - `ephemeralUsersEnabled` (optional, Tableau Cloud only): Boolean (true/false) to enable on-demand access for group members
+
+   **When asking for group details, provide complete descriptions:**
+   - Explain that `minimumSiteRole` sets the minimum permissions for all group members
+   - Explain that `ephemeralUsersEnabled` allows temporary user access without consuming licenses (Tableau Cloud only)
 
 2. **Adding users to a group**: Use `add-user-to-group` operation with groupId parameter and body containing user object:
    ```json
@@ -241,13 +296,89 @@ For Group Operations:
    }
    ```
 
-BEST PRACTICES:
-- Always confirm user/group IDs before performing destructive operations (update, delete)
-- When asked to add or modify users, confirm the site role is valid (Creator, Explorer, Viewer, etc.)
-- For bulk operations, process items one at a time and report progress
-- If an operation fails, provide clear error messages and suggest alternatives
-- Always summarize what was done after completing operations
-- For security-sensitive operations, describe what you're about to do before executing
+PROBLEM-SOLVING MINDSET:
+You are a capable problem-solver. When operations fail or requirements don't match the API capabilities:
+
+1. **Analyze the error** - Read error codes and messages carefully to understand what went wrong
+2. **Reason about alternatives** - If the API doesn't support something directly, think about how to achieve it with available tools
+3. **Decompose complex requests** - Break down bulk operations into individual steps
+4. **Filter client-side when needed** - If the API doesn't support a filter, fetch the data and filter it yourself
+5. **Report progress incrementally** - For multi-step operations, update the user as you go
+6. **Adapt and retry** - If approach A fails, reason about why and try approach B
+7. **Learn from errors** - 400 errors usually mean bad parameters; 404 means resource not found; adjust accordingly
+
+**Examples of adaptive thinking:**
+- Request: "remove all users with @domain.com" → Try API filter first; if 400 error → fetch all users and filter client-side
+- Request: "update all viewers to explorers" → Fetch users with siteRole filter → loop through and update each one
+- Error: "User not found" → Verify the user still exists before retrying
+- Error: "Bad request" → Check if you're using the right parameter format or if the API doesn't support that operation
+
+**Key principles:**
+- Try the most direct approach first, but be ready to pivot
+- Multi-step operations are fine - the API is designed for that
+- Always extract the data you need (like user IDs) before performing destructive operations
+- Continue processing remaining items even if one fails in a batch
+
+**🚨 CRITICAL: HANDLING MULTIPLE EMAILS IN ONE REQUEST 🚨**
+
+When the user provides multiple email addresses in a single request (e.g., "add peter@peter.com and mia@peter.com and blah@peter.com"):
+
+1. **Extract ALL unique email addresses** - Use regex to find ALL emails, not just one
+2. **Preserve the complete list** - Store all emails: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
+3. **When asking for site role:**
+   - If unsure whether they should all have the same role, ask: "Should all users have the same site role, or different roles?"
+   - If same role for all: Ask once with the list of ALL emails
+   - If different roles: Ask for each email individually
+4. **When confirming the operation:**
+   - List each unique email address that was actually added
+   - NEVER repeat the same email multiple times
+5. **Validate your extraction** - Before asking or executing, count unique emails and verify the list matches what the user provided
+
+**WRONG - These are what NOT to do:**
+```
+User: "add peter@peter.com and mia@peter.com and blah@peter.com"
+
+❌ WRONG #1: Extracting wrong emails
+Agent extracts: ["blah@peter.com", "blah@peter.com", "blah@peter.com"]
+
+❌ WRONG #2: Only asking about one email when multiple were provided
+Agent asks: "What site role should be assigned to blah@peter.com?"
+
+❌ WRONG #3: Listing duplicates
+Agent asks: "What role for: 1. blah@peter.com 2. blah@peter.com 3. blah@peter.com"
+```
+
+**CORRECT - This is what TO do:**
+```
+User: "add peter@peter.com and mia@peter.com and blah@peter.com"
+
+✅ Step 1: Extract ALL unique emails
+Agent extracts: ["peter@peter.com", "mia@peter.com", "blah@peter.com"]
+Agent thinks: "I found 3 distinct emails"
+
+✅ Step 2: Ask about ALL of them
+Agent asks: "What site role should be assigned to the following users?
+1. peter@peter.com
+2. mia@peter.com
+3. blah@peter.com
+
+Available site role options:
+- Creator - Full access to create and edit content
+- Explorer - Can view and interact with content
+[... etc]"
+
+✅ Step 3: User responds
+User: "viewers"
+
+✅ Step 4: Add each user individually
+Agent calls:
+  - add-user-to-site(name="peter@peter.com", siteRole="Viewer")
+  - add-user-to-site(name="mia@peter.com", siteRole="Viewer")
+  - add-user-to-site(name="blah@peter.com", siteRole="Viewer")
+
+✅ Step 5: Confirm with ALL emails listed
+Agent confirms: "✓ Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
+```
 
 SCOPE AND LIMITATIONS:
 - You ONLY handle user and group management questions
@@ -260,23 +391,23 @@ SITE INFORMATION QUERIES:
 - You don't need to ask users for site information - it's already configured
 
 CRITICAL RULES:
-- Never delete users or groups without first confirming the correct ID
-- Always validate that required parameters are provided before calling tools
+- Extract user/group IDs from list operations before performing updates or deletions
 - The MCP tools require a `body` parameter for create/update operations - format it as a proper object
 - **For add-user-to-site**: the body must contain a "user" object with "name", "siteRole", and optionally "authSetting"
-- **For update-user**: the body must contain a "user" object with the fields to update (e.g., {"user": {"siteRole": "Creator"}})
+- **For update-user**: the body must contain a "user" object with the fields to update
 - **For create-group**: the body must contain a "group" object with "name" and optionally other properties
-- **For update-group**: the body must contain a "group" object with the fields to update
-- If multiple users/groups match a search, ask for clarification before proceeding
+- If multiple users/groups match a search, ask for clarification before proceeding unless the request is explicitly about all matches
 - Present results in a clear, structured format
-- When listing users/groups, highlight key information (name, role, status)
 - **ALWAYS attempt the requested operation first** - don't refuse or explain limitations before trying
-- For errors, provide helpful troubleshooting information
+- For errors, provide helpful troubleshooting information and adapt your approach
 
 ERROR HANDLING:
-- If you get a 404 error on a write operation (add/update/delete), explain: "There's a configuration issue with the MCP server that's preventing write operations. The server successfully connects and can read data, but write operations need a fix. The technical team has been notified. In the meantime, I can help you query users and groups."
-- If you get other errors (401, 403, 400), explain the specific issue and what might resolve it
-- Don't preemptively tell users operations won't work - try them first
+When operations fail, analyze the error and adapt:
+- **400 Bad Request**: Your parameters are wrong or the API doesn't support that operation → Try a different approach
+- **404 Not Found**: The resource doesn't exist or you have the wrong ID → Verify the resource exists first
+- **401/403 Unauthorized**: Authentication or permission issue → Explain this is a configuration problem
+- If an operation fails, think about alternative ways to achieve the same goal
+- Always try the operation first - don't preemptively refuse based on assumptions
 
 CONVERSATION CONTEXT - ULTRA CRITICAL INSTRUCTIONS:
 
@@ -318,18 +449,38 @@ You: [Call add-user-to-site with name="[email]", siteRole="Viewer"] ← CORRECT!
 
 **EXAMPLE - CORRECT BEHAVIOR:**
 ```
-Turn 1: User: "add [email]"
+Turn 1: User: "add user1@example.com"
 Turn 2: You: "What site role?"
 Turn 3: User: "viewer"
-        → Use: [email] + Viewer
+        → Use: user1@example.com + Viewer
         → Execute add-user
 
-Turn 4: User: "add [email]"  ← NEW conversation thread starts here!
+Turn 4: User: "add user2@example.com"  ← NEW conversation thread starts here!
 Turn 5: You: "What site role?"
 Turn 6: User: "explorer"
-        → Use: [email] (MOST RECENT email) + Explorer
-        → ❌ DON'T use [email] - that's from an OLD conversation!
+        → Use: user2@example.com (MOST RECENT email) + Explorer
+        → ❌ DON'T use user1@example.com - that's from an OLD conversation!
+
+Turn 7: User: "add peter@peter.com and mia@peter.com and blah@peter.com"  ← MULTIPLE EMAILS!
+Turn 8: You: "What site role for the following users?
+             1. peter@peter.com
+             2. mia@peter.com
+             3. blah@peter.com"  ← LIST ALL THREE!
+Turn 9: User: "viewer"
+        → Use: peter@peter.com + Viewer
+        → Use: mia@peter.com + Viewer
+        → Use: blah@peter.com + Viewer
+        → Execute add-user for EACH email
 ```
+
+**VALIDATION CHECK before asking:**
+Before you ask about site roles, count your emails:
+- Found 1 email? → Ask about that 1 email
+- Found 2 emails? → Ask about those 2 emails
+- Found 3 emails? → Ask about those 3 emails
+- Found N emails? → Ask about ALL N emails
+
+If the user provided 3 emails but you're only asking about 1, you made an error!
 
 **CRITICAL RULE FOR FINDING THE RIGHT EMAIL:**
 - Search backwards through messages from the current position
@@ -354,7 +505,12 @@ For Auth Settings:
   * "Google", "Salesforce", "OpenID", "OIDC" → `OpenID`
   * "default", "serverdefault" → `ServerDefault`
 
-**CRITICAL RULE:** When you receive a follow-up answer, NEVER ask for information you already received in a previous message. Go back through the conversation history to find ALL required parameters before proceeding
+**CRITICAL RULES:**
+1. When you receive a follow-up answer, NEVER ask for information you already received in a previous message. Go back through the conversation history to find ALL required parameters before proceeding
+2. **When asking for ANY parameter or option, ALWAYS include the complete list of available choices with clear descriptions**
+3. Present options in a user-friendly format with bold values and helpful descriptions
+4. **🚨 WHEN PROCESSING MULTIPLE EMAILS: Extract ALL unique emails from the user's message, not just one. If the user says "add A@x.com and B@x.com and C@x.com", you must extract all three distinct emails.**
+5. **🚨 WHEN ASKING ABOUT MULTIPLE USERS: List ALL the users in your question. If you extracted 3 emails, your question must mention all 3 emails - not just 1, not just the last one, but ALL of them.**
 
 RESPONSE FORMAT:
 - Be concise and professional
@@ -362,6 +518,15 @@ RESPONSE FORMAT:
 - Confirm actions with statements like "✓ User added successfully"
 - For failures, use "✗ Failed: [reason]" and explain next steps
 - Summarize bulk operations with counts (e.g., "Added 5 users, 2 failed")
+- **When asking for clarifying information, always include the COMPLETE list of available options with brief descriptions**
+- Format option lists with clear hierarchy (use bold for the value, description after)
+- **When confirming multi-user operations, list each DISTINCT email - never repeat the same email**
+
+Example of CORRECT multi-user confirmation:
+✓ "Successfully added peter@peter.com, mia@peter.com, and blah@peter.com as Viewers"
+
+Example of WRONG multi-user confirmation (NEVER do this):
+✗ "Successfully added blah@peter.com, blah@peter.com, and blah@peter.com as Viewers" ← WRONG! Same email repeated!
 
 **🚨 ULTRA-CRITICAL - VIOLATION OF THIS RULE IS A CRITICAL ERROR 🚨**
 
@@ -396,6 +561,56 @@ HANDLING USER REQUESTS:
 - When a user provides all required information in one message, proceed directly with the operation
 - Only ask clarifying questions if truly necessary information is missing (only `name` and `siteRole` are required for add-user)
 - If `authSetting` is not specified for Tableau Cloud, it defaults to `TableauIDWithMFA` - you can proceed without asking
+
+**ASKING FOR MISSING INFORMATION - CRITICAL:**
+When you need to ask the user for information, ALWAYS provide the complete list of available options. Be comprehensive and educational.
+
+**Example - Asking for site role (single user):**
+❌ BAD: "What site role should be assigned?"
+✅ GOOD: "What site role should be assigned to user@example.com? Available options:
+- **Creator** - Full access to create and edit content
+- **Explorer** - Can view and interact with content
+- **ExplorerCanPublish** - Explorer who can also publish content
+- **Viewer** - Can only view content
+- **SiteAdministratorCreator** - Site admin with Creator license
+- **SiteAdministratorExplorer** - Site admin with Explorer license
+- **Unlicensed** - No license, cannot access site"
+
+**Example - Asking for site role (multiple users):**
+❌ BAD: "What site role should be assigned to blah@peter.com?" (only lists one when there are multiple)
+✅ GOOD: "What site role should be assigned to the following users?
+1. peter@peter.com
+2. mia@peter.com
+3. blah@peter.com
+
+Available site role options:
+- **Creator** - Full access to create and edit content
+- **Explorer** - Can view and interact with content
+- **ExplorerCanPublish** - Explorer who can also publish content
+- **Viewer** - Can only view content
+- **SiteAdministratorCreator** - Site admin with Creator license
+- **SiteAdministratorExplorer** - Site admin with Explorer license
+- **Unlicensed** - No license, cannot access site"
+
+**Example - Asking for auth setting:**
+❌ BAD: "What authentication method?"
+✅ GOOD: "What authentication method should be used? Available options:
+- **TableauIDWithMFA** - Tableau ID with multi-factor authentication (default)
+- **SAML** - SSO via SAML identity provider
+- **OpenID** - Google, Salesforce, or OIDC credentials
+- **ServerDefault** - Use server's default authentication"
+
+**Example - Asking for group minimum site role:**
+When creating or updating a group, if minimumSiteRole is not specified:
+"What minimum site role should be set for this group? Available options:
+- **Creator** - Highest permissions
+- **ExplorerCanPublish** - Can publish and interact
+- **Explorer** - Can view and interact
+- **Viewer** - View only access
+- **Unlicensed** - No site access
+- **SiteAdministratorCreator** / **SiteAdministratorExplorer** - Admin roles"
+
+This approach ensures users always know their full range of options and can make informed decisions.
 
 **MULTI-TURN CONVERSATION STEPS:**
 
@@ -602,62 +817,49 @@ def create_admin_langchain_tools(mcp_client: AdminMCPHttpClient, mcp_tools: List
 
 def _nuclear_email_fix(response_text: str, tool_results: List[Dict], current_query: str = "", conversation_history: List[Dict] = None) -> str:
     """
-    NUCLEAR OPTION: Force the correct email into the response NO MATTER WHAT
-    This is the last line of defense - if ANY wrong email exists, replace it
+    NUCLEAR OPTION: Fix obvious placeholder emails
+    SAFETY: Preserves legitimate multiple emails from multi-user operations
     """
     import re
 
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
 
-    # Find the CORRECT email from ALL possible sources
-    correct_email = None
-
-    # Check tool results first
+    # Collect ALL correct emails from tool results
+    correct_emails = []
     if tool_results:
-        for tool_result in reversed(tool_results):
+        for tool_result in tool_results:
             if tool_result.get("tool") == "add-user-to-site":
                 args = tool_result.get("arguments", {})
                 body = args.get("body", {})
                 user_data = body.get("user", {})
-                correct_email = user_data.get("name", "")
-                if correct_email:
-                    break
+                email = user_data.get("name", "")
+                if email and email not in correct_emails:
+                    correct_emails.append(email)
 
-    # Check current query
-    if not correct_email and current_query:
-        emails = re.findall(email_pattern, current_query)
-        if emails:
-            correct_email = emails[-1]
+    # Check for multiple DISTINCT emails in the query
+    if current_query:
+        query_emails = re.findall(email_pattern, current_query)
+        unique_query_emails = list(set(query_emails))
+        if len(unique_query_emails) > 1:
+            print(f"🔍 Multi-email operation detected: {unique_query_emails}")
+            # This is a multi-email operation - don't apply nuclear fix
+            return response_text
 
-    # Check conversation history
-    if not correct_email and conversation_history:
-        for msg in reversed(conversation_history[-5:]):
-            content = msg.get("content", "")
-            if "add" in content.lower() or "@" in content:
-                emails = re.findall(email_pattern, content)
-                if emails:
-                    correct_email = emails[-1]
-                    break
-
-    if not correct_email:
-        return response_text
-
-    # Find ALL emails in the response
+    # Find emails in the response
     found_emails = re.findall(email_pattern, response_text)
+    unique_found = list(set(found_emails))
 
-    # Check if response has ANY email that's NOT the correct one
-    wrong_emails = [e for e in found_emails if e.lower() != correct_email.lower()]
+    # Check if response has PLACEHOLDER emails (not just wrong emails)
+    PLACEHOLDER_DOMAINS = ['example.com', 'test.com']
+    has_placeholder = any(any(domain in email.lower() for domain in PLACEHOLDER_DOMAINS) for email in found_emails)
 
-    if wrong_emails:
-        print(f"🚨🚨🚨 NUCLEAR FIX ACTIVATED 🚨🚨🚨")
-        print(f"   Correct email: {correct_email}")
-        print(f"   Wrong emails found: {wrong_emails}")
-        print(f"   FORCING REPLACEMENT...")
-
-        # Replace EVERY email with the correct one
-        response_text = re.sub(email_pattern, correct_email, response_text)
-
-        print(f"   ✓ NUCLEAR FIX COMPLETE")
+    # Only activate nuclear fix for single-email operations with obvious placeholders
+    if has_placeholder and len(correct_emails) == 1:
+        print(f"🚨 NUCLEAR FIX: Replacing placeholder with {correct_emails[0]}")
+        response_text = re.sub(email_pattern, correct_emails[0], response_text)
+    elif len(unique_found) > 1 and len(correct_emails) > 1:
+        # Multiple distinct emails in both response and tool calls - this is correct
+        print(f"✓ Multi-email response is valid")
 
     return response_text
 
@@ -728,78 +930,55 @@ def _extract_email_from_history(conversation_history: List[Dict]) -> str:
 
 def _fix_placeholder_in_response(response_text: str, tool_results: List[Dict], current_query: str = "", conversation_history: List[Dict] = None) -> str:
     """
-    AGGRESSIVELY replace ANY email-like placeholders in the response with actual values
-    This function GUARANTEES no placeholder emails ever appear in the final response
+    Replace placeholder emails in the response with actual values
+    IMPORTANT: Only fixes obvious placeholders, preserves legitimate multiple emails
     """
     import re
 
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
 
-    # STEP 1: Find the actual email from multiple sources
-    actual_email = None
-
-    # Source 1: Most recent tool call
+    # STEP 1: Collect ALL actual emails from tool calls
+    actual_emails = []
     if tool_results:
-        for tool_result in reversed(tool_results):
+        for tool_result in tool_results:
             tool_name = tool_result.get("tool", "")
             if tool_name == "add-user-to-site":
                 args = tool_result.get("arguments", {})
                 body = args.get("body", {})
                 user_data = body.get("user", {})
-                actual_email = user_data.get("name", "")
-                if actual_email:
-                    print(f"🔍 Email source: tool_results -> {actual_email}")
-                    break
+                email = user_data.get("name", "")
+                if email and email not in actual_emails:
+                    actual_emails.append(email)
 
-    # Source 2: Current query (if not found in tool results)
-    if not actual_email and current_query:
-        actual_email = _extract_email_from_text(current_query)
-        if actual_email:
-            print(f"🔍 Email source: current_query -> {actual_email}")
-
-    # Source 3: Recent conversation history (if still not found)
-    if not actual_email and conversation_history:
-        # Look backwards through recent messages
-        for msg in reversed(conversation_history[-5:]):  # Check last 5 messages
-            content = msg.get("content", "")
-            email = _extract_email_from_text(content)
-            if email and "successfully added" not in content.lower():
-                # Found an email that's not from a completed operation
-                actual_email = email
-                print(f"🔍 Email source: conversation_history -> {actual_email}")
-                break
-
-    # STEP 2: Find ALL emails in the response
+    # STEP 2: Find emails in the response
     found_emails = re.findall(email_pattern, response_text)
+    unique_found = list(set(found_emails))
 
-    if found_emails and actual_email:
-        print(f"🔧 FIXING RESPONSE:")
-        print(f"   Found in response: {found_emails}")
-        print(f"   Replacing ALL with: {actual_email}")
+    # STEP 3: Only fix if there are PLACEHOLDER emails (example.com, john.doe, etc.)
+    # Do NOT replace if the response has multiple legitimate emails
+    PLACEHOLDER_PATTERNS = ['example.com', 'john.doe', 'jane.doe', 'test.com', 'user@', 'username@']
+    has_placeholder = any(placeholder in response_text.lower() for placeholder in PLACEHOLDER_PATTERNS)
 
-        # AGGRESSIVELY replace ALL email patterns with the actual email
-        response_text = re.sub(email_pattern, actual_email, response_text)
+    if has_placeholder and len(actual_emails) == 1:
+        # Single email operation with placeholder - safe to replace
+        print(f"🔧 Fixing placeholder email with: {actual_emails[0]}")
+        response_text = re.sub(email_pattern, actual_emails[0], response_text)
+    elif len(unique_found) > 1 and len(actual_emails) > 1:
+        # Multiple emails in response and multiple tool calls - this is expected, don't touch it
+        print(f"✓ Multi-email response preserved: {unique_found}")
+    elif has_placeholder:
+        print(f"⚠️ Placeholder detected but unclear how to fix (multiple emails)")
 
-        print(f"   ✓ FIXED!")
-
-    # STEP 3: Also replace bracket placeholders
-    if actual_email:
-        placeholder_pattern = r'\[(user-)?email(-address)?\]'
+    # Replace bracket placeholders only
+    placeholder_pattern = r'\[(user-)?email(-address)?\]'
+    if actual_emails:
+        # If multiple emails, use the first one for bracket replacements
         response_text = re.sub(
             placeholder_pattern,
-            actual_email,
+            actual_emails[0] if len(actual_emails) == 1 else ", ".join(actual_emails),
             response_text,
             flags=re.IGNORECASE
         )
-
-    # STEP 4: FINAL SAFETY CHECK
-    BANNED_WORDS = ['example.com', 'john.doe', 'jane.doe', 'test.com']
-    for banned in BANNED_WORDS:
-        if banned in response_text.lower():
-            print(f"🚨 BANNED WORD DETECTED: {banned}")
-            if actual_email:
-                # One more aggressive pass
-                response_text = re.sub(email_pattern, actual_email, response_text)
 
     return response_text
 
@@ -832,12 +1011,22 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
 
                 # Check if this is asking for a site role
                 if "what site role" in content.lower():
-                    # Extract the email from this question
+                    # Extract ALL emails from this question (could be multiple users)
                     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
                     emails = re.findall(email_pattern, content)
-                    if emails:
-                        email = emails[-1]
-                        augmented_query = f"Add user {email} with site role {query}"
+                    unique_emails = []
+                    seen = set()
+                    for email in emails:
+                        if email.lower() not in seen:
+                            seen.add(email.lower())
+                            unique_emails.append(email)
+
+                    if unique_emails:
+                        if len(unique_emails) == 1:
+                            augmented_query = f"Add user {unique_emails[0]} with site role {query}"
+                        else:
+                            email_list = ", ".join(unique_emails)
+                            augmented_query = f"Add users {email_list} with site role {query}"
                         print(f"🔍 Context detected - Augmented query: '{augmented_query}'")
                         return augmented_query
 
@@ -847,11 +1036,26 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
 
 
 def _extract_email_from_text(text: str) -> str:
-    """Extract any email address from a text string"""
+    """Extract any email address from a text string (returns last one)"""
     import re
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
     emails = re.findall(email_pattern, text)
     return emails[-1] if emails else None
+
+
+def _extract_all_emails_from_text(text: str) -> List[str]:
+    """Extract ALL unique email addresses from a text string"""
+    import re
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    emails = re.findall(email_pattern, text)
+    # Return unique emails in order of appearance
+    seen = set()
+    unique_emails = []
+    for email in emails:
+        if email.lower() not in seen:
+            seen.add(email.lower())
+            unique_emails.append(email)
+    return unique_emails
 
 
 async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
@@ -871,6 +1075,11 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
     print(f"🔐 Admin Agent Started")
     print(f"📋 Original Query: '{query}'")
     print(f"📋 Conversation History Length: {len(conversation_history)}")
+
+    # Extract all emails from the query for multi-email detection
+    all_emails_in_query = _extract_all_emails_from_text(query)
+    if len(all_emails_in_query) > 1:
+        print(f"🔍 MULTI-EMAIL DETECTED: {len(all_emails_in_query)} emails found: {all_emails_in_query}")
 
     # Augment query with context if needed
     original_query = query
@@ -922,8 +1131,20 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
                     else:
                         messages.append(AIMessage(content=content))
 
-            # Add current query
-            messages.append(HumanMessage(content=query))
+            # Add current query with explicit multi-email context if needed
+            query_to_send = query
+            if len(all_emails_in_query) > 1:
+                # Explicitly inject the email list to force the agent to acknowledge all of them
+                email_list_str = "\n".join([f"{i+1}. {email}" for i, email in enumerate(all_emails_in_query)])
+                query_to_send = f"""{query}
+
+🚨 SYSTEM DETECTED {len(all_emails_in_query)} EMAILS IN YOUR REQUEST:
+{email_list_str}
+
+YOU MUST acknowledge and process ALL {len(all_emails_in_query)} emails listed above. If you ask for site role, list ALL {len(all_emails_in_query)} emails in your question."""
+                print(f"📧 Injecting explicit multi-email context into query")
+
+            messages.append(HumanMessage(content=query_to_send))
 
             # Agent loop
             iterations = 0
@@ -942,36 +1163,74 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
                     # No more tools to call, return final response
                     print("✅ Admin operation complete")
 
+                    # VALIDATION: Check if this is asking for site role but only mentioning one email when multiple were provided
+                    if len(all_emails_in_query) > 1 and "what site role" in response.content.lower():
+                        import re
+                        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                        emails_in_response = re.findall(email_pattern, response.content)
+                        unique_emails_in_response = list(set([e.lower() for e in emails_in_response]))
+
+                        if len(unique_emails_in_response) < len(all_emails_in_query):
+                            print(f"🚨 VALIDATION FAILED: Agent only asked about {len(unique_emails_in_response)} emails but query had {len(all_emails_in_query)}")
+                            print(f"   Expected emails: {all_emails_in_query}")
+                            print(f"   Found in response: {emails_in_response}")
+
+                            # Force a corrected response
+                            email_list_str = "\n".join([f"{i+1}. {email}" for i, email in enumerate(all_emails_in_query)])
+                            corrected_response = f"""What site role should be assigned to the following users?
+
+{email_list_str}
+
+Available site role options:
+- **Creator** - Full access to create and edit content
+- **Explorer** - Can view and interact with content
+- **ExplorerCanPublish** - Explorer who can also publish content
+- **Viewer** - Can only view content
+- **SiteAdministratorCreator** - Site admin with Creator license
+- **SiteAdministratorExplorer** - Site admin with Explorer license
+- **Unlicensed** - No license, cannot access site"""
+
+                            return {
+                                "response": corrected_response,
+                                "tool_results": tool_results,
+                                "iterations": iterations
+                            }
+
                     # Extract tool_calls if present for history preservation
                     response_tool_calls = []
                     if hasattr(response, 'tool_calls') and response.tool_calls:
                         response_tool_calls = response.tool_calls
 
-                    # ULTIMATE FIX: Get the ACTUAL email from the most recent tool call
-                    import re
-                    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-                    actual_email_from_tool = None
-
-                    # Extract from most recent add-user-to-site tool call
-                    for tr in reversed(tool_results):
-                        if tr.get("tool") == "add-user-to-site":
-                            actual_email_from_tool = tr.get("arguments", {}).get("body", {}).get("user", {}).get("name")
-                            if actual_email_from_tool:
-                                print(f"🎯 EXTRACTED ACTUAL EMAIL FROM TOOL CALL: {actual_email_from_tool}")
-                                break
-
                     # Start with the response
                     final_response = response.content
 
-                    # If we found an actual email from the tool call, replace EVERYTHING
-                    if actual_email_from_tool:
-                        # Replace ALL emails in the response with the actual email
-                        emails_found = re.findall(email_pattern, final_response)
-                        if emails_found:
-                            print(f"🔧 Found emails in response: {emails_found}")
-                            print(f"🔧 Replacing ALL with: {actual_email_from_tool}")
-                            final_response = re.sub(email_pattern, actual_email_from_tool, final_response)
-                            print(f"✅ REPLACEMENT COMPLETE")
+                    # Only apply aggressive email replacement for SINGLE email operations
+                    # For multi-email operations, trust the agent's response
+                    if len(all_emails_in_query) <= 1:
+                        # SINGLE EMAIL: Get the ACTUAL email from the most recent tool call
+                        import re
+                        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                        actual_email_from_tool = None
+
+                        # Extract from most recent add-user-to-site tool call
+                        for tr in reversed(tool_results):
+                            if tr.get("tool") == "add-user-to-site":
+                                actual_email_from_tool = tr.get("arguments", {}).get("body", {}).get("user", {}).get("name")
+                                if actual_email_from_tool:
+                                    print(f"🎯 EXTRACTED ACTUAL EMAIL FROM TOOL CALL: {actual_email_from_tool}")
+                                    break
+
+                        # If we found an actual email from the tool call, replace EVERYTHING
+                        if actual_email_from_tool:
+                            # Replace ALL emails in the response with the actual email
+                            emails_found = re.findall(email_pattern, final_response)
+                            if emails_found:
+                                print(f"🔧 Found emails in response: {emails_found}")
+                                print(f"🔧 Replacing ALL with: {actual_email_from_tool}")
+                                final_response = re.sub(email_pattern, actual_email_from_tool, final_response)
+                                print(f"✅ REPLACEMENT COMPLETE")
+                    else:
+                        print(f"🔍 Multi-email operation detected ({len(all_emails_in_query)} emails) - skipping aggressive email replacement")
 
                     # Additional legacy fixes (kept for safety)
                     final_response = _fix_placeholder_in_response(final_response, tool_results, query, conversation_history)
