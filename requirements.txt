@@ -21,3 +21,6 @@ orjson>=3.9.0
 
 # Session management
 itsdangerous>=2.1.0
+
+# Slack bot demo
+slack-bolt>=1.21.0
