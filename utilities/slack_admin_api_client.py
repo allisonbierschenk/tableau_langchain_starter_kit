@@ -9,7 +9,7 @@ class AdminApiClient:
 
     def __init__(self) -> None:
         self.base_url = os.getenv("ADMIN_API_BASE_URL", "").rstrip("/")
-        self.path = os.getenv("ADMIN_API_PATH", "/mcp-chat")
+        self.path = os.getenv("ADMIN_API_PATH", "/slack-mcp-chat")
         self.bearer_token = os.getenv("ADMIN_API_BEARER_TOKEN", "")
         timeout_value = float(os.getenv("ADMIN_API_TIMEOUT_SECONDS", "45"))
         self.timeout = httpx.Timeout(timeout_value)

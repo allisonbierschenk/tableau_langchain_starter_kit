@@ -88,14 +88,14 @@ SLACK_ALLOWED_USER_IDS=*
 SLACK_MAX_HISTORY_ITEMS=20
 
 ADMIN_API_BASE_URL=https://eacloudadminagent.up.railway.app
-ADMIN_API_PATH=/mcp-chat
-ADMIN_API_BEARER_TOKEN=
+ADMIN_API_PATH=/slack-mcp-chat
+ADMIN_API_BEARER_TOKEN=your-shared-secret
 ADMIN_API_TIMEOUT_SECONDS=45
 ```
 
 Notes:
-- `ADMIN_API_PATH` defaults to `/mcp-chat`.
-- If your admin endpoint is protected behind custom bearer auth, set `ADMIN_API_BEARER_TOKEN`.
+- `ADMIN_API_PATH` defaults to `/slack-mcp-chat`.
+- `ADMIN_API_BEARER_TOKEN` is required and must match the API service value.
 - Set `SLACK_ALLOWED_USER_IDS=*` to allow all users in your workspace for demo simplicity.
 
 ## 9) Install dependencies
