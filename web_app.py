@@ -6,15 +6,14 @@ Using HTTP MCP client for admin operations
 import os
 import json
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Web UI Libraries
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from starlette.middleware.sessions import SessionMiddleware
 
 # Load Environment
 from dotenv import load_dotenv
@@ -22,25 +21,8 @@ load_dotenv()
 
 # Import our Admin MCP integration
 from utilities.admin_agent import admin_mcp_chat
-from utilities.tableau_auth import (
-    authenticate_with_tableau,
-    signout_from_tableau,
-    verify_admin_access,
-    TableauAuthToken
-)
 
 # Request/Response models
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-class LoginResponse(BaseModel):
-    success: bool
-    message: str
-    user_name: str = ""
-    site_role: str = ""
-    is_admin: bool = False
-
 class ChatRequest(BaseModel):
     message: str
     history: List[Dict] = []
@@ -56,12 +38,6 @@ app = FastAPI(
     description="Admin agent for managing Tableau Cloud users and groups via MCP"
 )
 
-# Session secret key - in production, use a secure random key from environment
-SESSION_SECRET = os.getenv("SESSION_SECRET", "change-this-to-a-secure-random-key-in-production")
-
-# Add session middleware (must be added before CORS)
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
-
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -72,45 +48,21 @@ app.add_middleware(
 )
 
 
-# Authentication helper functions
-async def get_current_user(request: Request) -> TableauAuthToken:
-    """
-    Dependency to get the current authenticated user from session
-
-    Raises:
-        HTTPException: If user is not authenticated or session expired
-    """
-    auth_data = request.session.get("tableau_auth")
-
-    if not auth_data:
+def _validate_slack_bearer_token(authorization: Optional[str]) -> None:
+    """Validate bearer token for Slack bot API access."""
+    expected_token = os.getenv("ADMIN_API_BEARER_TOKEN", "")
+    if not expected_token:
         raise HTTPException(
-            status_code=401,
-            detail="Not authenticated. Please login with your Tableau credentials."
+            status_code=500,
+            detail="ADMIN_API_BEARER_TOKEN is not configured on the API service.",
         )
 
-    try:
-        auth_token = TableauAuthToken.from_dict(auth_data)
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
 
-        # Check if token expired
-        if auth_token.is_expired():
-            request.session.clear()
-            raise HTTPException(
-                status_code=401,
-                detail="Session expired. Please login again."
-            )
-
-        # Check if user has admin access
-        if not auth_token.is_admin():
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access denied. Admin role required (you have: {auth_token.site_role})"
-            )
-
-        return auth_token
-
-    except Exception as e:
-        request.session.clear()
-        raise HTTPException(status_code=401, detail="Invalid session. Please login again.")
+    provided_token = authorization.split(" ", 1)[1].strip()
+    if provided_token != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid bearer token.")
 
 # Serve static files - use absolute path for Railway
 import pathlib
@@ -136,115 +88,9 @@ async def health_check():
         ]
     }
 
-@app.post("/login")
-async def login(request: Request, login_data: LoginRequest) -> LoginResponse:
-    """
-    Authenticate with Tableau credentials (username/password)
-
-    Returns:
-        LoginResponse with authentication result
-    """
-    try:
-        # Authenticate with Tableau
-        auth_token = await authenticate_with_tableau(
-            username=login_data.username,
-            password=login_data.password
-        )
-
-        # Check if user has admin access
-        if not auth_token.is_admin():
-            return LoginResponse(
-                success=False,
-                message=f"Access denied. You must be a Site Administrator to use this portal. Your role: {auth_token.site_role}",
-                user_name=auth_token.user_name,
-                site_role=auth_token.site_role,
-                is_admin=False
-            )
-
-        # Store auth token in session
-        request.session["tableau_auth"] = auth_token.to_dict()
-
-        return LoginResponse(
-            success=True,
-            message="Successfully authenticated with Tableau",
-            user_name=auth_token.user_name,
-            site_role=auth_token.site_role,
-            is_admin=True
-        )
-
-    except Exception as e:
-        return LoginResponse(
-            success=False,
-            message=str(e),
-            user_name="",
-            site_role="",
-            is_admin=False
-        )
-
-
-@app.post("/logout")
-async def logout(request: Request):
-    """Logout and invalidate Tableau session"""
-    auth_data = request.session.get("tableau_auth")
-
-    if auth_data:
-        try:
-            auth_token = TableauAuthToken.from_dict(auth_data)
-            # Invalidate the Tableau token
-            await signout_from_tableau(auth_token.token)
-        except:
-            pass
-
-    # Clear session
-    request.session.clear()
-
-    return {"message": "Successfully logged out"}
-
-
-@app.get("/auth/status")
-async def auth_status(request: Request):
-    """Check authentication status"""
-    auth_data = request.session.get("tableau_auth")
-
-    if not auth_data:
-        return {
-            "authenticated": False,
-            "user_name": None,
-            "site_role": None,
-            "is_admin": False
-        }
-
-    try:
-        auth_token = TableauAuthToken.from_dict(auth_data)
-
-        if auth_token.is_expired():
-            request.session.clear()
-            return {
-                "authenticated": False,
-                "user_name": None,
-                "site_role": None,
-                "is_admin": False
-            }
-
-        return {
-            "authenticated": True,
-            "user_name": auth_token.user_name,
-            "site_role": auth_token.site_role,
-            "is_admin": auth_token.is_admin()
-        }
-    except:
-        request.session.clear()
-        return {
-            "authenticated": False,
-            "user_name": None,
-            "site_role": None,
-            "is_admin": False
-        }
-
-
 @app.get("/system-prompt")
-async def get_system_prompt(current_user: TableauAuthToken = Depends(get_current_user)):
-    """Get admin system prompt for display in UI (requires authentication)"""
+async def get_system_prompt():
+    """Get admin system prompt for display in UI."""
     from utilities.admin_agent import ADMIN_SYSTEM_PROMPT
     return {
         "systemPrompt": ADMIN_SYSTEM_PROMPT
@@ -253,11 +99,10 @@ async def get_system_prompt(current_user: TableauAuthToken = Depends(get_current
 @app.post("/mcp-chat")
 async def mcp_chat_endpoint(
     request: ChatRequest,
-    current_user: TableauAuthToken = Depends(get_current_user)
 ) -> ChatResponse:
-    """Admin chat endpoint (non-streaming) - requires authentication"""
+    """Admin chat endpoint (non-streaming)."""
     try:
-        print(f"🔐 Admin Chat request from {current_user.user_name} ({current_user.site_role}): {request.message}")
+        print(f"🔐 Admin Chat request: {request.message}")
 
         # Process with Admin MCP Agent
         result = await admin_mcp_chat(
@@ -275,12 +120,35 @@ async def mcp_chat_endpoint(
         print(f"❌ Admin Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/slack-mcp-chat")
+async def slack_mcp_chat_endpoint(
+    request: ChatRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> ChatResponse:
+    """Slack bot endpoint using bearer token auth (no web session required)."""
+    _validate_slack_bearer_token(authorization)
+
+    try:
+        result = await admin_mcp_chat(
+            query=request.message,
+            conversation_history=request.history,
+        )
+
+        return ChatResponse(
+            response=result["response"],
+            tool_results=result["tool_results"],
+            iterations=result["iterations"],
+        )
+    except Exception as e:
+        print(f"❌ Slack Admin Chat error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/mcp-chat-stream")
 async def mcp_chat_stream_endpoint(
     request: ChatRequest,
-    current_user: TableauAuthToken = Depends(get_current_user)
 ):
-    """Admin chat streaming endpoint with progress updates - requires authentication"""
+    """Admin chat streaming endpoint with progress updates."""
 
     async def generate_stream():
         try:
