@@ -755,11 +755,8 @@ def _nuclear_email_fix(response_text: str, tool_results: List[Dict], current_que
     correct_emails = []
     if tool_results:
         for tool_result in tool_results:
-            if tool_result.get("tool") == "add-user-to-site":
-                args = tool_result.get("arguments", {})
-                body = args.get("body", {})
-                user_data = body.get("user", {})
-                email = user_data.get("name", "")
+            if _tool_result_is_add_user_site(tool_result):
+                email = _get_add_user_email_from_tool_args(tool_result.get("arguments") or {})
                 if email and email not in correct_emails:
                     correct_emails.append(email)
 
@@ -822,6 +819,35 @@ def _validate_no_placeholders(response_text: str) -> None:
         print("🚨" * 20)
 
 
+def _is_add_user_to_site_call(tool_name: str, tool_args: dict) -> bool:
+    """MCP may expose add-user as its own tool or under admin-users."""
+    if tool_name == "add-user-to-site":
+        return True
+    if tool_name == "admin-users" and tool_args.get("operation") == "add-user-to-site":
+        return True
+    return False
+
+
+def _get_add_user_email_from_tool_args(tool_args: dict) -> str:
+    body = tool_args.get("body") or {}
+    user = body.get("user") or {}
+    return (user.get("name") or "").strip()
+
+
+def _ensure_add_user_body_shape(tool_args: dict) -> None:
+    if "body" not in tool_args or tool_args["body"] is None:
+        tool_args["body"] = {}
+    if "user" not in tool_args["body"] or tool_args["body"]["user"] is None:
+        tool_args["body"]["user"] = {}
+
+
+def _tool_result_is_add_user_site(tool_result: dict) -> bool:
+    return _is_add_user_to_site_call(
+        tool_result.get("tool", ""),
+        tool_result.get("arguments") or {},
+    )
+
+
 def _extract_email_from_history(conversation_history: List[Dict]) -> str:
     """Extract the most recent email mentioned in the conversation that's part of an incomplete operation"""
     import re
@@ -839,12 +865,13 @@ def _extract_email_from_history(conversation_history: List[Dict]) -> str:
             # This is a completed operation, skip any emails in this message
             continue
 
-        # Look for emails in messages about adding users or asking for roles
-        if role == "assistant" and "what site role" in content.lower():
-            # This is a follow-up question - extract the email from it
-            emails = re.findall(email_pattern, content)
-            if emails:
-                return emails[-1]  # Return the email from the question
+        # Look for emails in assistant follow-ups (wording varies by model)
+        if role == "assistant":
+            cl = content.lower()
+            if "what site role" in cl or ("site role" in cl and re.search(email_pattern, content)):
+                emails = re.findall(email_pattern, content)
+                if emails:
+                    return emails[-1]
 
         if role == "user" and "add" in content.lower():
             # This is a user request to add someone
@@ -868,12 +895,8 @@ def _fix_placeholder_in_response(response_text: str, tool_results: List[Dict], c
     actual_emails = []
     if tool_results:
         for tool_result in tool_results:
-            tool_name = tool_result.get("tool", "")
-            if tool_name == "add-user-to-site":
-                args = tool_result.get("arguments", {})
-                body = args.get("body", {})
-                user_data = body.get("user", {})
-                email = user_data.get("name", "")
+            if _tool_result_is_add_user_site(tool_result):
+                email = _get_add_user_email_from_tool_args(tool_result.get("arguments") or {})
                 if email and email not in actual_emails:
                     actual_emails.append(email)
 
@@ -936,10 +959,11 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
                 if "✓" in content or "successfully" in content.lower():
                     return query  # Not a follow-up, completed operation in between
 
-                # Check if this is asking for a site role
-                if "what site role" in content.lower():
+                cl = content.lower()
+                email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                # Phrasing varies ("What site role...", "Which role..."); require email in message
+                if "what site role" in cl or ("site role" in cl and re.search(email_pattern, content)):
                     # Extract ALL emails from this question (could be multiple users)
-                    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
                     emails = re.findall(email_pattern, content)
                     unique_emails = []
                     seen = set()
@@ -1139,10 +1163,12 @@ Available site role options:
                         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
                         actual_email_from_tool = None
 
-                        # Extract from most recent add-user-to-site tool call
+                        # Extract from most recent add-user tool call (either tool name)
                         for tr in reversed(tool_results):
-                            if tr.get("tool") == "add-user-to-site":
-                                actual_email_from_tool = tr.get("arguments", {}).get("body", {}).get("user", {}).get("name")
+                            if _tool_result_is_add_user_site(tr):
+                                actual_email_from_tool = _get_add_user_email_from_tool_args(
+                                    tr.get("arguments") or {}
+                                )
                                 if actual_email_from_tool:
                                     print(f"🎯 EXTRACTED ACTUAL EMAIL FROM TOOL CALL: {actual_email_from_tool}")
                                     break
@@ -1186,25 +1212,31 @@ Available site role options:
                         if operation == "remove-user-from-site":
                             print(f"   🗑️  Attempting to remove user ID: {tool_args.get('userId', 'MISSING')}")
 
-                    # VALIDATION: Block placeholder emails in tool calls
-                    if tool_name == "add-user-to-site":
-                        user_name = tool_args.get("body", {}).get("user", {}).get("name", "")
-                        BANNED_EMAILS = ['john.doe@example.com', 'jane.doe@example.com',
-                                       'user@example.com', 'test@example.com', 'username@example.com']
+                    # VALIDATION: Block placeholder emails in tool calls (add-user-to-site or admin-users)
+                    if _is_add_user_to_site_call(tool_name, tool_args):
+                        user_name = _get_add_user_email_from_tool_args(tool_args)
+                        BANNED_EMAILS = [
+                            "john.doe@example.com",
+                            "jane.doe@example.com",
+                            "user@example.com",
+                            "user1@example.com",
+                            "test@example.com",
+                            "username@example.com",
+                        ]
 
-                        if any(banned in user_name.lower() for banned in BANNED_EMAILS) or '@example.com' in user_name.lower():
+                        if any(banned in user_name.lower() for banned in BANNED_EMAILS) or "@example.com" in user_name.lower():
                             print(f"🚨 BLOCKED PLACEHOLDER EMAIL IN TOOL CALL: {user_name}")
 
-                            # Extract actual email from conversation
                             actual_email = _extract_email_from_history(conversation_history)
                             if not actual_email:
                                 actual_email = _extract_email_from_text(query)
 
                             if actual_email:
                                 print(f"✅ REPLACING WITH ACTUAL EMAIL: {actual_email}")
+                                _ensure_add_user_body_shape(tool_args)
                                 tool_args["body"]["user"]["name"] = actual_email
                             else:
-                                print(f"❌ NO ACTUAL EMAIL FOUND - BLOCKING TOOL CALL")
+                                print("❌ NO ACTUAL EMAIL FOUND - BLOCKING TOOL CALL")
                                 error_msg = "I need a valid email address to add a user. Please provide the email address you want to add."
                                 messages.append(
                                     ToolMessage(
