@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 # Load Environment
 from dotenv import load_dotenv
@@ -25,8 +25,28 @@ from utilities.slack_mrkdwn import llm_markdown_to_slack_mrkdwn
 
 # Request/Response models
 class ChatRequest(BaseModel):
-    message: str
-    history: List[Dict] = []
+    """Accepts web UI (`message` + `history`) and Slack-style bodies (`text` + `messages`)."""
+
+    message: Optional[str] = None
+    text: Optional[str] = None
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+    messages: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def _require_user_text(self):
+        if not (self.message or self.text or "").strip():
+            raise ValueError("Provide 'message' or 'text' with the user's prompt.")
+        return self
+
+    def user_message(self) -> str:
+        return (self.message or self.text or "").strip()
+
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        if self.history:
+            return self.history
+        if self.messages:
+            return self.messages
+        return []
 
 class ChatResponse(BaseModel):
     response: str
@@ -103,12 +123,12 @@ async def mcp_chat_endpoint(
 ) -> ChatResponse:
     """Admin chat endpoint (non-streaming)."""
     try:
-        print(f"🔐 Admin Chat request: {request.message}")
+        print(f"🔐 Admin Chat request: {request.user_message()}")
 
         # Process with Admin MCP Agent
         result = await admin_mcp_chat(
-            query=request.message,
-            conversation_history=request.history
+            query=request.user_message(),
+            conversation_history=request.conversation_history(),
         )
 
         return ChatResponse(
@@ -132,8 +152,8 @@ async def slack_mcp_chat_endpoint(
 
     try:
         result = await admin_mcp_chat(
-            query=request.message,
-            conversation_history=request.history,
+            query=request.user_message(),
+            conversation_history=request.conversation_history(),
         )
 
         return ChatResponse(
@@ -168,8 +188,8 @@ async def mcp_chat_stream_endpoint(
 
             # Process with Admin MCP Agent
             result = await admin_mcp_chat(
-                query=request.message,
-                conversation_history=request.history
+                query=request.user_message(),
+                conversation_history=request.conversation_history(),
             )
 
             # Send final result

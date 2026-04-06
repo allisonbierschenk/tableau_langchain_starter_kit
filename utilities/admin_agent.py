@@ -952,36 +952,37 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
         # This looks like a follow-up answer to a question
         # Check if the most recent assistant message was asking for a site role
         for msg in reversed(conversation_history):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
+            if (msg.get("role") or "").lower() != "assistant":
+                continue
+            content = msg.get("content", "")
 
-                # Skip completed operations
-                if "✓" in content or "successfully" in content.lower():
-                    return query  # Not a follow-up, completed operation in between
+            # Skip completed operations
+            if "✓" in content or "successfully" in content.lower():
+                return query  # Not a follow-up, completed operation in between
 
-                cl = content.lower()
-                email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-                # Phrasing varies ("What site role...", "Which role..."); require email in message
-                if "what site role" in cl or ("site role" in cl and re.search(email_pattern, content)):
-                    # Extract ALL emails from this question (could be multiple users)
-                    emails = re.findall(email_pattern, content)
-                    unique_emails = []
-                    seen = set()
-                    for email in emails:
-                        if email.lower() not in seen:
-                            seen.add(email.lower())
-                            unique_emails.append(email)
+            cl = content.lower()
+            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            # Phrasing varies ("What site role...", "Which role..."); require email in message
+            if "what site role" in cl or ("site role" in cl and re.search(email_pattern, content)):
+                # Extract ALL emails from this question (could be multiple users)
+                emails = re.findall(email_pattern, content)
+                unique_emails: List[str] = []
+                seen = set()
+                for email in emails:
+                    if email.lower() not in seen:
+                        seen.add(email.lower())
+                        unique_emails.append(email)
 
-                    if unique_emails:
-                        if len(unique_emails) == 1:
-                            augmented_query = f"Add user {unique_emails[0]} with site role {query}"
-                        else:
-                            email_list = ", ".join(unique_emails)
-                            augmented_query = f"Add users {email_list} with site role {query}"
-                        print(f"🔍 Context detected - Augmented query: '{augmented_query}'")
-                        return augmented_query
+                if unique_emails:
+                    if len(unique_emails) == 1:
+                        augmented_query = f"Add user {unique_emails[0]} with site role {query}"
+                    else:
+                        email_list = ", ".join(unique_emails)
+                        augmented_query = f"Add users {email_list} with site role {query}"
+                    print(f"🔍 Context detected - Augmented query: '{augmented_query}'")
+                    return augmented_query
 
-                break  # Only check the most recent assistant message
+            break  # Only inspect the most recent assistant message
 
     return query
 
@@ -1009,6 +1010,48 @@ def _extract_all_emails_from_text(text: str) -> List[str]:
     return unique_emails
 
 
+def normalize_conversation_history(raw: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """
+    Unify shapes from web UI, Slack bots, and OpenAI-style clients:
+    - role: Assistant / USER / bot -> assistant / user
+    - content vs text vs body
+    """
+    if not raw:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        role_raw = (m.get("role") or m.get("type") or "").strip().lower()
+        if role_raw in ("assistant", "bot", "model", "ai"):
+            role = "assistant"
+        elif role_raw in ("user", "human", "customer", "client"):
+            role = "user"
+        else:
+            continue
+
+        content = m.get("content")
+        if content is None:
+            content = m.get("text") or m.get("body") or ""
+        if isinstance(content, list):
+            parts: List[str] = []
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    parts.append(str(p.get("text", "")))
+                elif isinstance(p, str):
+                    parts.append(p)
+            content = " ".join(parts)
+        else:
+            content = str(content)
+
+        item: Dict[str, Any] = {"role": role, "content": content}
+        if m.get("tool_calls") is not None:
+            item["tool_calls"] = m["tool_calls"]
+        out.append(item)
+    return out
+
+
 async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
     """
     Main admin chat function using MCP tools for user and group management
@@ -1022,6 +1065,7 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
     """
     if conversation_history is None:
         conversation_history = []
+    conversation_history = normalize_conversation_history(conversation_history)
 
     print(f"🔐 Admin Agent Started")
     print(f"📋 Original Query: '{query}'")
