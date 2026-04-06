@@ -6,12 +6,15 @@ Demo architecture:
 
 `Slack -> slack_bot.py -> ADMIN_API_BASE_URL + ADMIN_API_PATH -> admin agent -> MCP -> Tableau`
 
+**Bold in Slack:** The model often emits Markdown `**bold**`. Slack expects mrkdwn `*bold*`. The API (`/slack-mcp-chat`) and `slack_bot.py` both convert `**...**` to `*...*` before Slack sees the text.
+
 ## 1) Add files in this repo
 
 These files are part of this repo implementation:
 
 - `slack_bot.py`
 - `utilities/slack_admin_api_client.py`
+- `utilities/slack_mrkdwn.py`
 - `.env_template` updates
 - `requirements.txt` updates
 

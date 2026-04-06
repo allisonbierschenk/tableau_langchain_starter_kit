@@ -8,6 +8,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 from utilities.slack_admin_api_client import AdminApiClient
+from utilities.slack_mrkdwn import llm_markdown_to_slack_mrkdwn
 
 load_dotenv()
 
@@ -82,11 +83,13 @@ async def _run_admin_request(say, user_id: str, channel_id: str, prompt_text: st
         return
 
     response_text = result.get("response", "").strip() or "No response returned."
-    await say(text=response_text)
+    # Slack mrkdwn uses *bold*; model often emits **bold** (Markdown).
+    slack_text = llm_markdown_to_slack_mrkdwn(response_text)
+    await say(text=slack_text)
 
     # Keep short rolling memory for the demo.
     history.append({"role": "user", "content": prompt_text})
-    history.append({"role": "assistant", "content": response_text})
+    history.append({"role": "assistant", "content": slack_text})
     if len(history) > MAX_HISTORY_ITEMS:
         conversation_history[key] = history[-MAX_HISTORY_ITEMS:]
 

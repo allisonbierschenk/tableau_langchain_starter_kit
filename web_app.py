@@ -21,6 +21,7 @@ load_dotenv()
 
 # Import our Admin MCP integration
 from utilities.admin_agent import admin_mcp_chat
+from utilities.slack_mrkdwn import llm_markdown_to_slack_mrkdwn
 
 # Request/Response models
 class ChatRequest(BaseModel):
@@ -136,7 +137,7 @@ async def slack_mcp_chat_endpoint(
         )
 
         return ChatResponse(
-            response=result["response"],
+            response=llm_markdown_to_slack_mrkdwn(result["response"]),
             tool_results=result["tool_results"],
             iterations=result["iterations"],
         )
