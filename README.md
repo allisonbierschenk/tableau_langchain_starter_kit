@@ -161,3 +161,7 @@ ID: c79a393e-ac72-48c1-8338-3d802d7973d9
 
 💡 **Next Steps**: Ask me about specific metrics like "Show me top performers by revenue" or "What are the trends by region?" for more detailed analysis.
 ```
+
+## Slack bot
+
+Optional Socket Mode integration: see [README_SLACK.md](README_SLACK.md).
