@@ -1,0 +1,13 @@
+.venv
+venv
+env
+__pycache__
+*.pyc
+.git
+.gitignore
+.DS_Store
+*.log
+.env.local
+.env.*.local
+node_modules
+.sfdx

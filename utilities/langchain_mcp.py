@@ -24,10 +24,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configuration (required: set MCP_SERVER_URL in .env or environment)
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
-if not MCP_SERVER_URL:
-    raise ValueError("MCP_SERVER_URL environment variable is required")
+# Configuration (required: set ADMIN_MCP_SERVER in .env or environment)
+ADMIN_MCP_SERVER = os.getenv("ADMIN_MCP_SERVER")
+if not ADMIN_MCP_SERVER:
+    raise ValueError("ADMIN_MCP_SERVER environment variable is required")
 MAX_MCP_ITERATIONS = 10  # Reduced for efficiency
 
 # Learning and Memory System
@@ -618,7 +618,7 @@ class MCPTool(BaseTool):
 
 async def create_mcp_tools() -> List[MCPTool]:
     """Create LangChain tools from MCP server"""
-    async with MCPHttpClient(MCP_SERVER_URL) as client:
+    async with MCPHttpClient(ADMIN_MCP_SERVER) as client:
         # Get available tools
         tools_data = await client.list_tools()
         
@@ -643,7 +643,7 @@ async def tableau_mcp_chat(query: str, conversation_history: List[Dict] = None) 
     if conversation_history is None:
         conversation_history = []
     
-    async with MCPHttpClient(MCP_SERVER_URL) as mcp_client:
+    async with MCPHttpClient(ADMIN_MCP_SERVER) as mcp_client:
         # Get available tools
         tools_data = await mcp_client.list_tools()
         print(f"Found {len(tools_data)} MCP tools: {[t['name'] for t in tools_data]}")

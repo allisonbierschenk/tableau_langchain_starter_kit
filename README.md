@@ -107,6 +107,7 @@ This will test:
 3. **Enhanced web interface** - Modern, responsive design
 4. **Comprehensive testing** - Full test suite for all functionality
 5. **Better error handling** - Robust error handling and fallback responses
+6. **Admin Agent** - New dedicated agent for user and group management
 
 ## Example Responses
 

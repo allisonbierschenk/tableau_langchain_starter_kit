@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Tableau AI Chat</title>
+    <title>Tableau Admin Portal</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
@@ -14,33 +14,70 @@
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:8000';
         } else {
-            window.API_BASE_URL = 'https://mcpagent.up.railway.app';
+            window.API_BASE_URL = 'https://eacloudadminagent.up.railway.app';
         }
     </script>
     
     <script src="static/script.js" defer></script>
 </head>
 <body>
-    <!-- Chat Container -->
-    <div id="chatContainer" class="chat-container-visible">
+    <!-- Login Container -->
+    <div id="loginContainer" class="login-container">
+        <div class="login-box">
+            <div class="login-header">
+                <h1>Tableau Admin Portal</h1>
+                <p>Sign in with your Tableau credentials</p>
+            </div>
+
+            <div class="login-form">
+                <div class="form-group">
+                    <label for="loginUsername">Email</label>
+                    <input type="text" id="loginUsername" placeholder="your.email@company.com" autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" placeholder="Enter your password" autocomplete="current-password">
+                </div>
+
+                <div id="loginError" class="login-error" style="display: none;"></div>
+
+                <button type="button" id="loginBtn" class="login-button">
+                    Sign In
+                </button>
+
+                <div class="login-info">
+                    <strong>Admin Access Required</strong>
+                    <p>Only Site Administrators can access this portal</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Container (hidden initially) -->
+    <div id="chatContainer" class="chat-container" style="display: none;">
         <div class="container">
             <header>
-                <h1>Conversational Analytics</h1>
+                <h1>Tableau Admin Portal</h1>
+                <p>User & Group Management <span id="userInfo" style="margin-left: 8px;"></span></p>
+                <button id="logoutBtn" class="logout-button">Logout</button>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    Hello! I can help you explore your Tableau data sources and provide insights.
+                    <strong>Welcome!</strong> Ask me to manage users and groups on your Tableau site.
                     <br><br>
-                    Try asking:
-                    <br>• "What data sources do I have access to?"
-                    <br>• "List the fields in the databricks superstore datasource"
-                    <br>• "Show me the top 2 insights"
+                    Examples:
+                    <br>• List all users
+                    <br>• Add user@email.com as a Creator
+                    <br>• Show all groups
+                    <br>• Remove users with @domain.com
+                    <br>• Add user@email.com to Sales group
                 </div>
             </div>
 
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type your question here..." autocomplete="off">
+                <input type="text" id="messageInput" placeholder="Ask about users or groups..." autocomplete="off">
                 <button type="button" id="sendBtn">Send</button>
             </div>
         </div>

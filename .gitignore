@@ -3,3 +3,4 @@ venv/
 *.pyc
 *.twbr
 ext_agent.trex
+.env_template
