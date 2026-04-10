@@ -56,7 +56,7 @@ class ChatResponse(BaseModel):
 # Create FastAPI app
 app = FastAPI(
     title="Tableau Admin Portal",
-    description="Admin agent for managing Tableau Cloud users and groups via MCP"
+    description="Comprehensive admin agent for managing Tableau Cloud users, groups, permissions, jobs, and operations via tableau-mcp server"
 )
 
 # Add CORS middleware
@@ -102,10 +102,16 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "tableau-admin-portal",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "capabilities": [
             "user-management",
-            "group-management"
+            "group-management",
+            "permissions-management",
+            "job-management",
+            "operations-management",
+            "lineage-queries",
+            "stale-content-reports",
+            "workbook-archiving"
         ]
     }
 
@@ -181,7 +187,7 @@ async def mcp_chat_stream_endpoint(
             yield f"data: {{\"message\": \"Connecting to admin MCP server...\", \"step\": \"connect\"}}\n\n"
 
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Loading admin tools (user & group management)...\", \"step\": \"load-tools\"}}\n\n"
+            yield f"data: {{\"message\": \"Loading admin tools (users, groups, permissions, jobs, operations)...\", \"step\": \"load-tools\"}}\n\n"
 
             yield f"event: progress\n"
             yield f"data: {{\"message\": \"Processing admin request...\", \"step\": \"processing\"}}\n\n"
@@ -224,7 +230,8 @@ if __name__ == "__main__":
     import uvicorn
 
     print("🔐 Starting Tableau Admin Portal")
-    print("📊 Admin operations: User & Group Management")
+    print("📊 Admin operations: Users, Groups, Permissions, Jobs, Operations")
+    print("🔧 MCP Server: " + os.getenv("ADMIN_MCP_SERVER", "Not configured"))
 
     port = int(os.getenv("PORT", 8000))
     # Disable reload in production (Railway sets RAILWAY_ENVIRONMENT)

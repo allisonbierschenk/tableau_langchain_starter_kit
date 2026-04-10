@@ -107,7 +107,7 @@ This will test:
 3. **Enhanced web interface** - Modern, responsive design
 4. **Comprehensive testing** - Full test suite for all functionality
 5. **Better error handling** - Robust error handling and fallback responses
-6. **Admin Agent** - New dedicated agent for user and group management
+6. **Admin Agent** - Comprehensive agent for user, group, permissions, job, and operations management
 
 ## Example Responses
 
@@ -161,6 +161,107 @@ ID: c79a393e-ac72-48c1-8338-3d802d7973d9
 
 💡 **Next Steps**: Ask me about specific metrics like "Show me top performers by revenue" or "What are the trends by region?" for more detailed analysis.
 ```
+
+## Admin Agent
+
+The Admin Agent provides comprehensive Tableau Cloud administration capabilities through the tableau-mcp server.
+
+### Capabilities
+
+**User Management:**
+- Add, update, and delete users
+- Query users with filters and sorting
+- Manage site roles and authentication methods
+
+**Group Management:**
+- Create and manage groups
+- Add/remove users from groups
+- Set minimum site roles for groups
+
+**Permissions Management:**
+- List granular permissions on workbooks, datasources, projects, flows, and views
+- Add, update, and delete permissions for users and groups
+- Query default permissions for projects
+- Bulk permission operations
+
+**Job Management:**
+- Query all jobs with filtering (extract refreshes, flow runs, subscriptions)
+- Get detailed job information by ID
+- Cancel running or queued jobs
+- Monitor job status and progress
+
+**Operations Management:**
+- Analyze job overlap and concurrent execution patterns
+- Calculate effective permissions across all content
+- Trace user access paths through groups and permissions
+- Scan for permission overrides on content
+- Generate stale content reports for cleanup
+- Query lineage relationships via Metadata API
+- Archive workbooks to S3 or base64
+
+### Usage Examples
+
+**Add a user:**
+```
+Add user john.doe@company.com with Creator role
+```
+
+**Grant permissions:**
+```
+Give user jane.smith@company.com Read and Write access to workbook "Sales Dashboard"
+```
+
+**Query jobs:**
+```
+Show me all failed extract refresh jobs from today
+```
+
+**Find stale content:**
+```
+Generate a report of workbooks not viewed in the last 90 days
+```
+
+**Analyze permissions:**
+```
+Show me effective permissions for user john.doe@company.com on all workbooks
+```
+
+### Configuration
+
+The Admin Agent connects to the tableau-mcp server via the `ADMIN_MCP_SERVER` environment variable:
+
+```bash
+ADMIN_MCP_SERVER='https://your-mcp-server.example.com/tableau-mcp'
+```
+
+**Per-User Authentication (Optional):**
+
+For direct-trust + JWT pattern with per-request user identity:
+
+```bash
+MCP_JWT_SUB_CLAIM_HEADER='X-Tableau-Jwt-Username'
+TABLEAU_USER='admin.user@company.com'
+```
+
+**Important:** Only use per-user headers with network-protected MCP endpoints (VPN, private link, mTLS).
+
+**Tool Filtering (Optional):**
+
+Restrict available MCP tools for security:
+
+```bash
+INCLUDE_TOOL_GROUPS='admin,operations'
+EXCLUDE_TOOLS='archive-workbook'
+```
+
+### Architecture
+
+The Admin Agent uses the tableau-mcp server as described in the [tableau-mcp integration handoff](https://github.com/tableau/tableau-mcp/blob/main/docs/integrations/slack-http-ui-handoff.md):
+
+- **MCP HTTP Transport**: JSON-RPC over streamable HTTP
+- **Tool Groups**: `admin-users`, `admin-groups`, `content-permissions`, `site-jobs`, `tableau-operations`
+- **Authentication**: OAuth or direct-trust with per-request user headers
+- **Scope-based Authorization**: Connected App JWT scopes for fine-grained access control
 
 ## Slack bot
 

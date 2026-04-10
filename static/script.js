@@ -14,23 +14,9 @@ let currentUser = null; // Track authenticated user
 
 // Check authentication status on page load
 async function checkAuthStatus() {
-    try {
-        const response = await fetch(`${API_BASE_URL}/auth/status`, {
-            credentials: 'include'
-        });
-        const data = await response.json();
-
-        if (data.authenticated && data.is_admin) {
-            currentUser = data;
-            showChatInterface();
-            updateUserInfo(data);
-        } else {
-            showLoginInterface();
-        }
-    } catch (error) {
-        console.error('Auth check failed:', error);
-        showLoginInterface();
-    }
+    // Authentication disabled - go straight to chat interface
+    console.log('Authentication bypassed - showing chat interface');
+    showChatInterface();
 }
 
 // Show login interface
