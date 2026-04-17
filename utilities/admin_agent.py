@@ -133,6 +133,8 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Track conversation context - don't ask for the same info twice
 - Present results clearly and concisely
 
+**Data sources, workbooks, and content (not only users/groups):** The MCP catalog often includes content and data tools (names vary by server), such as **`list-datasources`**, **`list-workbooks`**, **`query-datasource`**, **`get-datasource-metadata`**, **`search-content`**, etc. For requests like "list all datasources" or "what data sources exist", **search your available tool names and descriptions** for datasource/workbook/query/list patterns and **invoke the matching tool**. Only say a capability is unavailable if **no** such tool appears after you have checked the full list—and then say clearly that the **MCP server did not expose** that tool (e.g. `INCLUDE_TOOLS` / tool groups on the host), not that Tableau lacks the feature.
+
 **Permissions and "who has access":** If the user asks to list users (by name or email) who can reach a workbook or other content, do not stop at naming a group (e.g. "All Users") and inferred capabilities. Use the relevant content-permissions / operations tools to resolve the workbook (or content) ID, list explicit grants (group vs user, capabilities), then list site users and group memberships as needed so you can name users and state whether access is direct, via a named group, project default, or site role. If the result set is large, say so and show a representative sample plus how to narrow the question.
 
 **Tableau Pulse metrics (mandatory):** When listing Pulse subscriptions or “which metrics” a user follows, every item must show **Metric name** (or equivalent title) and never be UUID-only.
@@ -328,13 +330,12 @@ def _nuclear_email_fix(response_text: str, tool_results: List[Dict], current_que
                 if email and email not in correct_emails:
                     correct_emails.append(email)
 
-    # Check for multiple DISTINCT emails in the query
-    if current_query:
-        query_emails = re.findall(email_pattern, current_query)
+    merged = _merged_user_text_for_email_guards(current_query, conversation_history)
+    if merged.strip():
+        query_emails = re.findall(email_pattern, merged)
         unique_query_emails = list(set(query_emails))
         if len(unique_query_emails) > 1:
-            print(f"🔍 Multi-email operation detected: {unique_query_emails}")
-            # This is a multi-email operation - don't apply nuclear fix
+            print(f"🔍 Multi-email session — skip nuclear email replace: {unique_query_emails}")
             return response_text
 
     # Find emails in the response
@@ -478,10 +479,13 @@ def _fix_placeholder_in_response(response_text: str, tool_results: List[Dict], c
     PLACEHOLDER_PATTERNS = ['example.com', 'john.doe', 'jane.doe', 'test.com', 'user@', 'username@']
     has_placeholder = any(placeholder in response_text.lower() for placeholder in PLACEHOLDER_PATTERNS)
 
-    if has_placeholder and len(actual_emails) == 1:
-        # Single email operation with placeholder - safe to replace
+    session_addrs = _extract_session_user_emails(current_query, conversation_history)
+    if has_placeholder and len(actual_emails) == 1 and len(session_addrs) <= 1:
+        # Single-email session: safe to replace obvious placeholders with the tool email
         print(f"🔧 Fixing placeholder email with: {actual_emails[0]}")
         response_text = re.sub(email_pattern, actual_emails[0], response_text)
+    elif has_placeholder and len(session_addrs) > 1:
+        print("🔍 Multi-email session — skip blanket placeholder→single-tool-email replace")
     elif len(unique_found) > 1 and len(actual_emails) > 1:
         # Multiple emails in response and multiple tool calls - this is expected, don't touch it
         print(f"✓ Multi-email response preserved: {unique_found}")
@@ -579,6 +583,28 @@ def _extract_all_emails_from_text(text: str) -> List[str]:
     return unique_emails
 
 
+def _merged_user_text_for_email_guards(
+    current_query: str, conversation_history: Optional[List[Dict[str, Any]]], max_turns: int = 24
+) -> str:
+    """Recent user utterances + current message (used so follow-ups like \"viewer\" still see prior emails)."""
+    parts = [current_query or ""]
+    for m in (conversation_history or [])[-max_turns:]:
+        if m.get("role") == "user":
+            parts.append(str(m.get("content") or ""))
+    return "\n".join(parts)
+
+
+def _extract_session_user_emails(
+    current_user_message: str,
+    conversation_history: Optional[List[Dict[str, Any]]],
+    max_turns: int = 24,
+) -> List[str]:
+    """All unique emails from recent user turns and the current user message."""
+    return _extract_all_emails_from_text(
+        _merged_user_text_for_email_guards(current_user_message, conversation_history, max_turns)
+    )
+
+
 def normalize_conversation_history(raw: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """
     Unify shapes from web UI, Slack bots, and OpenAI-style clients:
@@ -640,17 +666,19 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
     print(f"📋 Original Query: '{query}'")
     print(f"📋 Conversation History Length: {len(conversation_history)}")
 
-    # Extract all emails from the query for multi-email detection
-    all_emails_in_query = _extract_all_emails_from_text(query)
-    if len(all_emails_in_query) > 1:
-        print(f"🔍 MULTI-EMAIL DETECTED: {len(all_emails_in_query)} emails found: {all_emails_in_query}")
-
-    # Augment query with context if needed
+    # Augment query first so follow-ups (e.g. role only) carry prior emails in `query`
     original_query = query
     query = _augment_query_with_context(query, conversation_history)
 
     if query != original_query:
         print(f"✨ Query augmented to: '{query}'")
+
+    # Multi-email scope = augmented query ∪ recent user messages (follow-ups often omit addresses)
+    emails_augmented = _extract_all_emails_from_text(query)
+    emails_session = _extract_session_user_emails(original_query, conversation_history)
+    all_emails_in_query = list(dict.fromkeys(list(emails_augmented) + list(emails_session)))
+    if len(all_emails_in_query) > 1:
+        print(f"🔍 MULTI-EMAIL SESSION: {len(all_emails_in_query)} addresses in scope: {all_emails_in_query}")
 
     try:
         tableau_username = TABLEAU_USER if MCP_JWT_SUB_CLAIM_HEADER else None
@@ -800,15 +828,16 @@ Available site role options:
                     # Start with the response
                     final_response = response.content
 
-                    # Only apply aggressive email replacement for SINGLE email operations
-                    # For multi-email operations, trust the agent's response
-                    if len(all_emails_in_query) <= 1:
-                        # SINGLE EMAIL: Get the ACTUAL email from the most recent tool call
-                        import re
-                        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-                        actual_email_from_tool = None
+                    # Legacy single-email normalization: never collapse multiple distinct recipients
+                    # into one address (regression when follow-up text has no emails but session had two+).
+                    import re
 
-                        # Extract from most recent add-user tool call (either tool name)
+                    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                    emails_in_final = re.findall(email_pattern, final_response)
+                    unique_in_final = list(dict.fromkeys(emails_in_final))
+
+                    if len(all_emails_in_query) <= 1 and len(unique_in_final) <= 1:
+                        actual_email_from_tool = None
                         for tr in reversed(tool_results):
                             if _tool_result_is_add_user_site(tr):
                                 actual_email_from_tool = _get_add_user_email_from_tool_args(
@@ -818,17 +847,14 @@ Available site role options:
                                     print(f"🎯 EXTRACTED ACTUAL EMAIL FROM TOOL CALL: {actual_email_from_tool}")
                                     break
 
-                        # If we found an actual email from the tool call, replace EVERYTHING
-                        if actual_email_from_tool:
-                            # Replace ALL emails in the response with the actual email
-                            emails_found = re.findall(email_pattern, final_response)
-                            if emails_found:
-                                print(f"🔧 Found emails in response: {emails_found}")
-                                print(f"🔧 Replacing ALL with: {actual_email_from_tool}")
-                                final_response = re.sub(email_pattern, actual_email_from_tool, final_response)
-                                print(f"✅ REPLACEMENT COMPLETE")
+                        if actual_email_from_tool and emails_in_final:
+                            print(f"🔧 Normalizing single-address reply with tool email: {actual_email_from_tool}")
+                            final_response = re.sub(email_pattern, actual_email_from_tool, final_response)
                     else:
-                        print(f"🔍 Multi-email operation detected ({len(all_emails_in_query)} emails) - skipping aggressive email replacement")
+                        print(
+                            f"🔍 Skipping single-email normalization "
+                            f"(session={len(all_emails_in_query)} addrs, reply={len(unique_in_final)} distinct)"
+                        )
 
                     # Additional legacy fixes (kept for safety)
                     final_response = _fix_placeholder_in_response(final_response, tool_results, query, conversation_history)
