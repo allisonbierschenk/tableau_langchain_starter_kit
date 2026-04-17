@@ -59,13 +59,14 @@
         <div class="container">
             <header>
                 <h1>Tableau Admin Portal</h1>
-                <p>User & Group Management <span id="userInfo" style="margin-left: 8px;"></span></p>
+                <p class="header-tagline">Tableau MCP <span class="header-sep">·</span> optional Slack bridge <span id="userInfo" class="header-user"></span></p>
+                <div id="integrationBar" class="integration-bar" role="status" aria-live="polite"></div>
                 <button id="logoutBtn" class="logout-button">Logout</button>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    <strong>Welcome!</strong> Ask me to manage users and groups on your Tableau site.
+                    <strong>Welcome!</strong> Ask about Tableau site admin (users, groups, permissions, Pulse, jobs). When Slack MCP is enabled on the server, you can also ask to post summaries or look up channels—same chat.
                     <br><br>
                     Examples:
                     <br>• List all users
@@ -73,11 +74,13 @@
                     <br>• Show all groups
                     <br>• Remove users with @domain.com
                     <br>• Add user@email.com to Sales group
+                    <br>• <span class="slack-example">Slack:</span> List channels matching “analytics” (when bridge is on)
                 </div>
             </div>
 
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Ask about users or groups..." autocomplete="off">
+                <label for="messageInput" class="sr-only">Message</label>
+                <textarea id="messageInput" rows="2" placeholder="Manage Tableau..." autocomplete="off"></textarea>
                 <button type="button" id="sendBtn">Send</button>
             </div>
         </div>

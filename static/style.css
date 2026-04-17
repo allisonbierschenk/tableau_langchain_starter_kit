@@ -63,6 +63,106 @@ header p {
     font-size: 14px;
 }
 
+.header-tagline {
+    font-size: 13px;
+    opacity: 0.92;
+    line-height: 1.45;
+}
+
+.header-sep {
+    opacity: 0.5;
+    padding: 0 0.2em;
+}
+
+.header-user {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 0.85;
+}
+
+/* Tableau + Slack integration strip (under header title) */
+.integration-bar {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.integration-bar .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.badge-tableau {
+    background: rgba(6, 182, 212, 0.25);
+    color: #ecfeff;
+    border: 1px solid rgba(34, 211, 238, 0.45);
+}
+
+.badge-slack {
+    background: rgba(74, 21, 75, 0.55);
+    color: #f4f0f7;
+    border: 1px solid rgba(236, 178, 255, 0.45);
+}
+
+.integration-note {
+    flex: 1 1 180px;
+    color: #cbd5e1;
+    font-weight: 400;
+}
+
+.integration-note code {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #e2e8f0;
+    font-size: 11px;
+}
+
+.integration-note-muted {
+    opacity: 0.88;
+}
+
+.slack-example {
+    color: #6b21a8;
+    font-weight: 600;
+}
+
+.ready-banner {
+    background: #f0f9ff;
+    border-left: 4px solid #0891b2;
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #0f172a;
+}
+
+.ready-banner kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    margin: 0 1px;
+    font-size: 11px;
+    font-family: ui-monospace, Menlo, Monaco, monospace;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-shadow: 0 1px 0 #e2e8f0;
+}
+
 /* Chat Box */
 .chat-box {
     flex: 1;
@@ -184,6 +284,51 @@ header p {
     50% { opacity: 0.7; }
 }
 
+/* Admin stream progress (Tableau vs Slack-aware) */
+.admin-progress {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
+    border-radius: 12px;
+    color: #0e7490;
+    font-size: 13px;
+    margin: 5px 0;
+    line-height: 1.45;
+}
+
+.admin-progress em {
+    font-style: normal;
+    font-weight: 500;
+}
+
+.admin-progress-slack {
+    background: #faf5ff;
+    border-color: #d8b4fe;
+    color: #581c87;
+}
+
+.progress-icon-tableau,
+.progress-icon-slack {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-top: 3px;
+}
+
+.progress-icon-tableau {
+    background: #06b6d4;
+    box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.25);
+}
+
+.progress-icon-slack {
+    background: #611f69;
+    box-shadow: 0 0 0 2px rgba(97, 31, 105, 0.2);
+}
+
 /* Insight Boxes */
 .insight-box {
     background: #ecfdf5;
@@ -288,7 +433,8 @@ header p {
     align-items: flex-end;
 }
 
-.input-area input[type="text"] {
+.input-area input[type="text"],
+.input-area textarea {
     flex: 1;
     padding: 10px 12px;
     border: 1px solid #cbd5e1;
@@ -297,19 +443,27 @@ header p {
     font-family: inherit;
     outline: none;
     transition: all 0.2s ease;
-    resize: none;
-    min-height: 20px;
-    max-height: 100px;
+    resize: vertical;
+    min-height: 44px;
+    max-height: 200px;
+    line-height: 1.45;
     background: white;
     color: #0f172a;
 }
 
-.input-area input[type="text"]:focus {
+.input-area textarea {
+    field-sizing: content;
+    min-height: 52px;
+}
+
+.input-area input[type="text"]:focus,
+.input-area textarea:focus {
     border-color: #06b6d4;
     box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
 }
 
-.input-area input[type="text"]:disabled {
+.input-area input[type="text"]:disabled,
+.input-area textarea:disabled {
     background: #f8fafc;
     color: #64748b;
     cursor: not-allowed;

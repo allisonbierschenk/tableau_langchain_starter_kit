@@ -6,6 +6,7 @@ Using HTTP MCP client for admin operations
 import os
 import json
 import asyncio
+from contextlib import AsyncExitStack
 from typing import List, Dict, Any, Optional
 
 # Web UI Libraries
@@ -53,6 +54,13 @@ class ChatResponse(BaseModel):
     tool_results: List[Dict] = []
     iterations: int = 0
 
+
+class OrchestrationRunRequest(BaseModel):
+    """Plan-then-execute: LLM emits ExecutionPlan, engine runs MCP steps (optional Slack translation)."""
+
+    user_goal: str = Field(..., min_length=1)
+    constraints: Optional[Dict[str, Any]] = None
+
 # Create FastAPI app
 app = FastAPI(
     title="Tableau Admin Portal",
@@ -96,13 +104,25 @@ async def read_root():
     index_path = static_dir / "index.html"
     return FileResponse(str(index_path))
 
+
+@app.get("/SEHuddle", response_class=HTMLResponse)
+@app.get("/sehuddle", response_class=HTMLResponse)
+async def se_huddle_one_pager():
+    """One-pager for Solutions Engineers (presentation / customer framing)."""
+    path = static_dir / "se_huddle.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="SE Huddle page not found.")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint (includes flags the web UI uses for Slack vs Tableau-only layout)."""
+    slack_mcp = bool((os.getenv("SLACK_MCP_SERVER") or "").strip())
     return {
         "status": "healthy",
         "service": "tableau-admin-portal",
         "version": "2.0.0",
+        "slack_mcp_configured": slack_mcp,
         "capabilities": [
             "user-management",
             "group-management",
@@ -111,7 +131,8 @@ async def health_check():
             "operations-management",
             "lineage-queries",
             "stale-content-reports",
-            "workbook-archiving"
+            "workbook-archiving",
+            "dual-mcp-orchestration",
         ]
     }
 
@@ -171,6 +192,58 @@ async def slack_mcp_chat_endpoint(
         print(f"❌ Slack Admin Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/orchestration/plan-execute")
+async def orchestration_plan_execute(request: OrchestrationRunRequest) -> Dict[str, Any]:
+    """
+    MCP-only plan-then-execute: TaskPlanner (LLM) + BindingResolver + MCPRouter.
+    Uses ADMIN_MCP_SERVER and optional SLACK_MCP_SERVER from the environment.
+    """
+    from utilities.admin_agent import (
+        AdminMCPHttpClient,
+        MCP_JWT_SUB_CLAIM_HEADER,
+        TABLEAU_USER,
+        ADMIN_MCP_SERVER,
+    )
+    from utilities.mcp_jsonrpc_client import MCPJsonRpcSseClient
+    from utilities.identity_mapping import SlackMCPIdentityMapper, slack_mcp_extra_headers_from_env
+    from orchestration.mcp_router import MCPRouter
+    from orchestration.catalog import ToolCatalogBuilder
+    from orchestration.engine import OrchestrationEngine
+    from orchestration.translation import McpTranslationLayer
+    from orchestration.types import PlannerContext
+
+    slack_url = (os.getenv("SLACK_MCP_SERVER") or "").strip()
+    try:
+        async with AsyncExitStack() as stack:
+            tableau_username = TABLEAU_USER if MCP_JWT_SUB_CLAIM_HEADER else None
+            admin_client = await stack.enter_async_context(
+                AdminMCPHttpClient(ADMIN_MCP_SERVER, tableau_username=tableau_username)
+            )
+            slack_client = None
+            if slack_url:
+                slack_client = await stack.enter_async_context(
+                    MCPJsonRpcSseClient(
+                        slack_url,
+                        extra_headers=slack_mcp_extra_headers_from_env() or None,
+                    )
+                )
+            router = MCPRouter.with_tableau_and_optional_slack(admin_client, slack_client)
+            catalog = await ToolCatalogBuilder.load(router)
+            translation = None
+            if slack_client:
+                translation = McpTranslationLayer(SlackMCPIdentityMapper.from_env_defaults(slack_client))
+            engine = OrchestrationEngine(router, translation=translation)
+            ctx = PlannerContext(
+                user_goal=request.user_goal.strip(),
+                constraints=request.constraints,
+            )
+            return await engine.plan_then_execute(ctx, catalog)
+    except Exception as e:
+        print(f"❌ Orchestration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/mcp-chat-stream")
 async def mcp_chat_stream_endpoint(
     request: ChatRequest,
@@ -188,6 +261,19 @@ async def mcp_chat_stream_endpoint(
 
             yield f"event: progress\n"
             yield f"data: {{\"message\": \"Loading admin tools (users, groups, permissions, jobs, operations)...\", \"step\": \"load-tools\"}}\n\n"
+
+            if (os.getenv("SLACK_MCP_SERVER") or "").strip():
+                yield f"event: progress\n"
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "message": "Slack MCP is configured — Slack tools use the slack_mcp__ name prefix when invoked.",
+                            "step": "slack-tools",
+                        }
+                    )
+                    + "\n\n"
+                )
 
             yield f"event: progress\n"
             yield f"data: {{\"message\": \"Processing admin request...\", \"step\": \"processing\"}}\n\n"

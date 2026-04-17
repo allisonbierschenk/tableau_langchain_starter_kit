@@ -6,6 +6,7 @@ Uses MCP server for admin operations: add, update, edit, delete users and groups
 import os 
 import json
 import asyncio
+from contextlib import AsyncExitStack
 from typing import List, Dict, Any, Optional
 
 # LangChain Libraries
@@ -18,6 +19,27 @@ from pydantic import BaseModel, Field
 import httpx
 from dotenv import load_dotenv
 
+from utilities.mcp_jsonrpc_client import MCPJsonRpcSseClient
+from utilities.identity_mapping import slack_mcp_extra_headers_from_env
+from orchestration.mcp_router import MCPRouter
+from orchestration.catalog import tool_definitions_for_server
+from orchestration.langchain_adapters import create_routed_langchain_tools
+from orchestration.cross_mcp_prompt import CROSS_MCP_GOVERNANCE
+from orchestration.types import MCPServerId, ToolCatalog
+from utilities.mcp_schema_models import build_tool_args_model_from_input_schema
+from utilities.tableau_mcp_normalize import (
+    coerce_value_to_plain_dict,
+    maybe_log_admin_users_schema,
+    normalize_tableau_mcp_tool_call,
+)
+from utilities.pulse_metric_enrich import (
+    backfill_pulse_id_names_via_mcp,
+    enrich_assistant_text_pulse_metric_names,
+    extract_pulse_metric_id_to_name,
+    metric_uuids_candidates_in_response,
+    scrub_stale_pulse_api_disclaimer,
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -25,6 +47,8 @@ load_dotenv()
 ADMIN_MCP_SERVER = os.getenv("ADMIN_MCP_SERVER")
 if not ADMIN_MCP_SERVER:
     raise ValueError("ADMIN_MCP_SERVER environment variable is required")
+
+SLACK_MCP_SERVER = (os.getenv("SLACK_MCP_SERVER") or "").strip()
 
 # Get site information from environment
 TABLEAU_SITE = os.getenv("TABLEAU_SITE", "unknown")
@@ -42,7 +66,18 @@ SITE CONTEXT:
 - Tableau Site: {TABLEAU_SITE}
 - Tableau Domain: {TABLEAU_DOMAIN}
 - Connected via MCP Server: {ADMIN_MCP_SERVER}
-"""
+""" + (
+    f"\n- Slack MCP Server: {SLACK_MCP_SERVER}"
+    if SLACK_MCP_SERVER
+    else ""
+)
+
+
+def _mcp_native_tool_name(qualified_or_native: str) -> str:
+    """LangChain tool names may be qualified (tableau_mcp__…); validations use native MCP names."""
+    if "__" in qualified_or_native:
+        return qualified_or_native.split("__", 1)[1]
+    return qualified_or_native
 
 _CRITICAL_CONVERSATION_RULE = """
 ⚠️⚠️⚠️ ULTRA-CRITICAL: READ THIS IMMEDIATELY ⚠️⚠️⚠️
@@ -96,7 +131,17 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Tools are self-documenting - read their descriptions and parameters
 - Multi-step operations are fine (e.g., get user ID first, then update)
 - Track conversation context - don't ask for the same info twice
-- Present results clearly and concisely"""
+- Present results clearly and concisely
+
+**Permissions and "who has access":** If the user asks to list users (by name or email) who can reach a workbook or other content, do not stop at naming a group (e.g. "All Users") and inferred capabilities. Use the relevant content-permissions / operations tools to resolve the workbook (or content) ID, list explicit grants (group vs user, capabilities), then list site users and group memberships as needed so you can name users and state whether access is direct, via a named group, project default, or site role. If the result set is large, say so and show a representative sample plus how to narrow the question.
+
+**Tableau Pulse metrics (mandatory):** When listing Pulse subscriptions or “which metrics” a user follows, every item must show **Metric name** (or equivalent title) and never be UUID-only.
+- **Incomplete / not allowed:** numbered bullets that only show `Metric ID: <uuid>` plus period/comparison.
+- **If subscription payloads are id-only:** follow Tableau Pulse REST patterns (see [Pulse REST](https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_ref_pulse.htm)): use MCP tools that list metric definitions/metrics in batch or site-wide (e.g. `list-all-pulse-metric-definitions`, or `definitions:batchGet` / `metrics:batchGet` equivalents exposed as tools) to resolve each LUID to its definition or metric display name before answering.
+- Prefer the same field names the MCP JSON uses (`metricDefinition.name`, `title`, `specifiedName`, etc.). If tool JSON already contains id+name pairs, your final answer must surface the name for each id.
+
+**Tableau REST payloads (admin-users):** For `add-user-to-site`, follow the MCP `inputSchema` and Tableau REST: use nested `body.user.name` (sign-in email on Tableau Cloud) and `body.user.siteRole` with valid role names (e.g. Viewer, Unlicensed). Do not put `email` or `siteRole` at the top level of `body` unless the schema explicitly allows it.
+"""
 
 class AdminMCPHttpClient:
     """HTTP-based MCP client for admin operations"""
@@ -227,7 +272,9 @@ class AdminLangChainTool(BaseTool):
     async def _arun(self, **kwargs) -> str:
         """Execute the MCP tool"""
         try:
-            result = await self.mcp_client.call_tool(self.name, kwargs)
+            clean = {k: v for k, v in kwargs.items() if v is not None}
+            clean = normalize_tableau_mcp_tool_call(self.name, clean)
+            result = await self.mcp_client.call_tool(self.name, clean)
 
             # Format result as string for LangChain
             if isinstance(result, dict):
@@ -242,52 +289,15 @@ class AdminLangChainTool(BaseTool):
 
 
 def create_admin_langchain_tools(mcp_client: AdminMCPHttpClient, mcp_tools: List[Dict]) -> List[BaseTool]:
-    """Convert MCP tools to LangChain tools for admin operations"""
+    """Convert MCP tools to LangChain tools for admin operations (schema-accurate nested models)."""
     langchain_tools = []
 
     for tool in mcp_tools:
         tool_name = tool.get('name', '')
         tool_description = tool.get('description', 'No description')
         tool_input_schema = tool.get('inputSchema', {})
+        ToolArgsModel = build_tool_args_model_from_input_schema(tool_name, tool_input_schema)
 
-        # Create Pydantic model for tool arguments
-        properties = tool_input_schema.get('properties', {})
-        required = tool_input_schema.get('required', [])
-
-        # Build field definitions
-        field_definitions = {}
-        for prop_name, prop_details in properties.items():
-            # Map JSON schema types to Python types
-            prop_type = prop_details.get('type', 'string')
-            if prop_name == 'body':
-                # Body should be a dict/object
-                field_type = dict
-            elif prop_type == 'number':
-                field_type = float
-            elif prop_type == 'boolean':
-                field_type = bool
-            else:
-                field_type = str  # Default to string
-
-            field_description = prop_details.get('description', '')
-            is_required = prop_name in required
-
-            if is_required:
-                field_definitions[prop_name] = (field_type, Field(..., description=field_description))
-            else:
-                field_definitions[prop_name] = (Optional[field_type], Field(None, description=field_description))
-
-        # Create dynamic Pydantic model
-        ToolArgsModel = type(
-            f"{tool_name}_args",
-            (BaseModel,),
-            {
-                '__annotations__': {k: v[0] for k, v in field_definitions.items()},
-                **{k: v[1] for k, v in field_definitions.items()}
-            }
-        )
-
-        # Create LangChain tool
         lc_tool = AdminLangChainTool(
             name=tool_name,
             description=tool_description,
@@ -379,24 +389,25 @@ def _validate_no_placeholders(response_text: str) -> None:
 
 def _is_add_user_to_site_call(tool_name: str, tool_args: dict) -> bool:
     """MCP may expose add-user as its own tool or under admin-users."""
-    if tool_name == "add-user-to-site":
+    native = _mcp_native_tool_name(tool_name)
+    if native == "add-user-to-site":
         return True
-    if tool_name == "admin-users" and tool_args.get("operation") == "add-user-to-site":
+    if native == "admin-users" and tool_args.get("operation") == "add-user-to-site":
         return True
     return False
 
 
 def _get_add_user_email_from_tool_args(tool_args: dict) -> str:
-    body = tool_args.get("body") or {}
-    user = body.get("user") or {}
-    return (user.get("name") or "").strip()
+    body = coerce_value_to_plain_dict(tool_args.get("body"))
+    user = coerce_value_to_plain_dict(body.get("user"))
+    return (str(user.get("name") or "")).strip()
 
 
 def _ensure_add_user_body_shape(tool_args: dict) -> None:
-    if "body" not in tool_args or tool_args["body"] is None:
-        tool_args["body"] = {}
-    if "user" not in tool_args["body"] or tool_args["body"]["user"] is None:
-        tool_args["body"]["user"] = {}
+    body = coerce_value_to_plain_dict(tool_args.get("body"))
+    user = coerce_value_to_plain_dict(body.get("user"))
+    body["user"] = user
+    tool_args["body"] = body
 
 
 def _tool_result_is_add_user_site(tool_result: dict) -> bool:
@@ -642,24 +653,55 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
         print(f"✨ Query augmented to: '{query}'")
 
     try:
-        # Initialize admin MCP client with optional per-user authentication
         tableau_username = TABLEAU_USER if MCP_JWT_SUB_CLAIM_HEADER else None
-        async with AdminMCPHttpClient(ADMIN_MCP_SERVER, tableau_username=tableau_username) as admin_client:
+        default_max_iter = 24 if SLACK_MCP_SERVER else MAX_ADMIN_ITERATIONS
+        max_iterations = int(os.getenv("MAX_ADMIN_ITERATIONS", str(default_max_iter)))
 
-            # Get available admin tools
-            print("🔍 Discovering admin tools...")
-            admin_tools = await admin_client.list_tools()
-            print(f"✅ Found {len(admin_tools)} admin tools")
+        async with AsyncExitStack() as stack:
+            admin_client = await stack.enter_async_context(
+                AdminMCPHttpClient(ADMIN_MCP_SERVER, tableau_username=tableau_username)
+            )
+            slack_client: Optional[MCPJsonRpcSseClient] = None
+            if SLACK_MCP_SERVER:
+                slack_client = await stack.enter_async_context(
+                    MCPJsonRpcSseClient(
+                        SLACK_MCP_SERVER,
+                        extra_headers=slack_mcp_extra_headers_from_env() or None,
+                    )
+                )
+                print("💬 Slack MCP client enabled")
 
-            if not admin_tools:
+            router = MCPRouter.with_tableau_and_optional_slack(admin_client, slack_client)
+            print("🔍 Discovering MCP tools...")
+            tableau_mcp_tools = await admin_client.list_tools()
+            maybe_log_admin_users_schema(tableau_mcp_tools)
+            n_tableau = len(tableau_mcp_tools)
+            print(
+                f"✅ Tableau MCP: {n_tableau} tools "
+                f"(if this is unexpectedly low, check INCLUDE_TOOLS / EXCLUDE_TOOLS on the MCP server)"
+            )
+
+            langchain_tools = create_admin_langchain_tools(admin_client, tableau_mcp_tools)
+
+            if slack_client:
+                slack_mcp_tools = await slack_client.list_tools()
+                n_slack = len(slack_mcp_tools)
+                print(f"✅ Slack MCP: {n_slack} tools")
+                slack_catalog = ToolCatalog(
+                    tools=tool_definitions_for_server(MCPServerId.SLACK_MCP, slack_mcp_tools)
+                )
+                langchain_tools = langchain_tools + create_routed_langchain_tools(router, slack_catalog)
+
+            if not langchain_tools:
                 return {
-                    "response": "No admin tools available from the MCP server. Please check the server configuration.",
+                    "response": "No MCP tools available. Check ADMIN_MCP_SERVER / SLACK_MCP_SERVER.",
                     "tool_results": [],
-                    "iterations": 0
+                    "iterations": 0,
                 }
 
-            # Convert to LangChain tools
-            langchain_tools = create_admin_langchain_tools(admin_client, admin_tools)
+            system_prompt = ADMIN_SYSTEM_PROMPT
+            if slack_client:
+                system_prompt = ADMIN_SYSTEM_PROMPT + "\n" + CROSS_MCP_GOVERNANCE
 
             # Initialize LLM with tools
             llm = ChatOpenAI(
@@ -670,7 +712,7 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
             llm_with_tools = llm.bind_tools(langchain_tools)
 
             # Build message history
-            messages = [SystemMessage(content=ADMIN_SYSTEM_PROMPT)]
+            messages = [SystemMessage(content=system_prompt)]
 
             # Add conversation history WITH tool calls if available
             for msg in conversation_history:
@@ -704,7 +746,7 @@ YOU MUST acknowledge and process ALL {len(all_emails_in_query)} emails listed ab
             iterations = 0
             tool_results = []
 
-            while iterations < MAX_ADMIN_ITERATIONS:
+            while iterations < max_iterations:
                 iterations += 1
                 print(f"\n🔄 Iteration {iterations}")
 
@@ -793,6 +835,26 @@ Available site role options:
                     _validate_no_placeholders(final_response)
                     final_response = _nuclear_email_fix(final_response, tool_results, query, conversation_history)
 
+                    pulse_map = extract_pulse_metric_id_to_name(tool_results)
+                    uuids_in_answer = metric_uuids_candidates_in_response(final_response)
+                    more_names = await backfill_pulse_id_names_via_mcp(
+                        admin_client,
+                        tableau_mcp_tools,
+                        final_response,
+                        pulse_map,
+                    )
+                    if more_names:
+                        pulse_map = {**pulse_map, **more_names}
+                    if pulse_map:
+                        enriched = enrich_assistant_text_pulse_metric_names(final_response, pulse_map)
+                        if enriched != final_response:
+                            print("📊 Enriched reply with Pulse metric names (tool JSON and/or catalog backfill)")
+                        final_response = enriched
+                    if uuids_in_answer:
+                        final_response = scrub_stale_pulse_api_disclaimer(
+                            final_response, uuids_in_answer, pulse_map
+                        )
+
                     return {
                         "response": final_response,
                         "tool_results": tool_results,
@@ -805,11 +867,14 @@ Available site role options:
                     tool_name = tool_call["name"]
                     tool_args = tool_call["args"]
 
-                    print(f"🔧 Calling admin tool: {tool_name}")
+                    native_name = _mcp_native_tool_name(tool_name)
+                    if isinstance(tool_args, dict) and native_name == "admin-users" and "body" in tool_args:
+                        tool_args["body"] = coerce_value_to_plain_dict(tool_args.get("body"))
+                    print(f"🔧 Calling MCP tool: {tool_name} (native={native_name})")
                     print(f"   Arguments: {json.dumps(tool_args, indent=2)}")
 
                     # Log operation type for debugging
-                    if tool_name == "admin-users":
+                    if native_name == "admin-users":
                         operation = tool_args.get("operation", "unknown")
                         print(f"   Operation: {operation}")
                         if operation == "remove-user-from-site":
@@ -850,7 +915,7 @@ Available site role options:
                                 continue
 
                     # VALIDATION: Validate user ID format for remove-user-from-site
-                    if tool_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
+                    if native_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
                         user_id = tool_args.get("userId", "")
                         import re
                         # Tableau user IDs are UUIDs (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
@@ -871,7 +936,7 @@ Available site role options:
                     tool_result = None
                     for tool in langchain_tools:
                         if tool.name == tool_name:
-                            tool_result = await tool._arun(**tool_args)
+                            tool_result = await tool.ainvoke(tool_args)
                             break
 
                     if tool_result is None:
@@ -880,7 +945,7 @@ Available site role options:
                     print(f"   Result: {tool_result[:200]}...")
 
                     # Enhanced error detection for user removal
-                    if tool_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
+                    if native_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
                         try:
                             result_data = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                             if isinstance(result_data, dict) and result_data.get("isError"):
@@ -914,7 +979,7 @@ Available site role options:
                     )
 
             # Max iterations reached
-            print(f"⚠️ Max iterations ({MAX_ADMIN_ITERATIONS}) reached")
+            print(f"⚠️ Max iterations ({max_iterations}) reached")
             return {
                 "response": "Admin operation completed but reached maximum iteration limit. Some actions may be incomplete.",
                 "tool_results": tool_results,

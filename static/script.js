@@ -414,8 +414,7 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             console.log('Result event, fullResponse:', fullResponse);
                             console.log('Tool results for datasource extraction:', window.lastToolResults);
                             if (fullResponse) {
-                                // Format admin response
-                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse, eventData.tool_results);
+                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
                                 // Show the message div now that we have content
                                 botMessageDiv.style.display = '';
                             }
@@ -472,7 +471,14 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
 // --- Handle Admin Progress Events ---
 function handleMCPProgressEvent(eventData, progressDiv) {
     if (eventData.message) {
-        progressDiv.innerHTML = `<div class="admin-progress"><em>${eventData.message || 'Processing...'}</em></div>`;
+        const raw = eventData.message || 'Processing...';
+        const msg = escapeHtml(raw);
+        const slackish = /slack/i.test(raw);
+        const cls = slackish ? 'admin-progress admin-progress-slack' : 'admin-progress';
+        const dot = slackish
+            ? '<span class="progress-icon-slack" aria-hidden="true"></span>'
+            : '<span class="progress-icon-tableau" aria-hidden="true"></span>';
+        progressDiv.innerHTML = `<div class="${cls}">${dot}<em>${msg}</em></div>`;
     }
 }
 
@@ -482,7 +488,7 @@ function getMCPProgressIcon(step) {
 }
 
 // --- Admin Response Formatting ---
-function formatMCPResponse(text, toolResults = null) {
+function formatMCPResponse(text) {
     if (!text) return '';
 
     let formatted = text
@@ -619,18 +625,25 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// --- Enhanced Enter Key Handler ---
+// --- Enter / Shift+Enter (Slack-style multiline) ---
 function handleEnter(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         sendMessage();
     } else if (event.key === 'Escape') {
-        // Cancel current stream if running
         if (currentStream) {
             currentStream.abort();
             currentStream = null;
         }
     }
+}
+
+function autoResizeMessageInput() {
+    const el = document.getElementById('messageInput');
+    if (!el || el.tagName !== 'TEXTAREA') return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, 200);
+    el.style.height = `${Math.max(52, next)}px`;
 }
 
 // --- Enhanced Keyboard Shortcuts ---
@@ -704,17 +717,35 @@ function displayDashboardImage() {
     }
 }
 
-// --- Enhanced Connection Health Check ---
+// --- Health (includes Slack MCP flag for UI) ---
 async function checkServerHealth() {
     try {
-        const response = await fetch(`${API_BASE_URL}/health`, { 
-            method: 'GET',
-            timeout: 5000 
-        });
-        return response.ok;
+        const response = await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
+        if (!response.ok) {
+            return { ok: false, slack: false };
+        }
+        const data = await response.json();
+        return { ok: true, slack: !!data.slack_mcp_configured, raw: data };
     } catch (error) {
         console.warn('Server health check failed:', error);
-        return false;
+        return { ok: false, slack: false };
+    }
+}
+
+function updateIntegrationBar(health) {
+    const el = document.getElementById('integrationBar');
+    if (!el) return;
+    if (!health.ok) {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="integration-note integration-note-muted">Could not reach API health — check connection.</span>';
+        return;
+    }
+    if (health.slack) {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="badge badge-slack">Slack MCP</span><span class="integration-note">Bridge on: Tableau tools use native names; Slack tools use the <code>slack_mcp__</code> prefix.</span>';
+    } else {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="integration-note integration-note-muted">Slack bridge off (set <code>SLACK_MCP_SERVER</code> on the API to enable).</span>';
     }
 }
 
@@ -723,28 +754,37 @@ document.addEventListener('DOMContentLoaded', async function() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    // Debug: Show which API URL is being used
     console.log('Using API URL:', API_BASE_URL);
     console.log('Current hostname:', window.location.hostname);
 
-    // Setup event listeners
-    if (messageInput) messageInput.addEventListener('keypress', handleEnter);
+    if (messageInput) {
+        messageInput.addEventListener('keydown', handleEnter);
+        messageInput.addEventListener('input', autoResizeMessageInput);
+    }
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
-    
+
     setupKeyboardShortcuts();
 
-    // Auto-focus on input
     if (messageInput) {
         setTimeout(() => messageInput.focus(), 100);
+        autoResizeMessageInput();
     }
 
-    // Check server health
-    const serverHealthy = await checkServerHealth();
-    if (!serverHealthy) {
-        addMessage(`<strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
+    const health = await checkServerHealth();
+    updateIntegrationBar(health);
+    if (!health.ok) {
+        addMessage(
+            `<strong>Server Connection Issue</strong><br>Unable to connect to the backend at ${escapeHtml(API_BASE_URL)}. Start the API server and refresh.`,
+            'bot'
+        );
         return;
     }
 
-    // Show ready message
-    addMessage('<div style="background-color: #f0f9ff; border-left: 3px solid #0066cc; padding: 10px;"><strong>Ready!</strong> You can now ask me about user and group management operations.</div>', "bot");
+    const slackHint = health.slack
+        ? ' Tableau and Slack MCP are both available from this UI.'
+        : ' Slack MCP is not configured on the server; only Tableau admin tools are available here.';
+    addMessage(
+        `<div class="ready-banner"><strong>Ready.</strong>${escapeHtml(slackHint)} Ask in plain language—use <kbd>Enter</kbd> to send and <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.</div>`,
+        'bot'
+    );
 });

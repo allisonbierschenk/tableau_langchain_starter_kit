@@ -263,6 +263,23 @@ The Admin Agent uses the tableau-mcp server as described in the [tableau-mcp int
 - **Authentication**: OAuth or direct-trust with per-request user headers
 - **Scope-based Authorization**: Connected App JWT scopes for fine-grained access control
 
+### Dual MCP orchestration (Tableau + Slack)
+
+The admin chat path (`admin_mcp_chat` / `/mcp-chat`) loads tools from `ADMIN_MCP_SERVER` using **native Tableau MCP tool names** (same as pre–dual-MCP). When `SLACK_MCP_SERVER` is set, **Slack-only** tools are appended with the `slack_mcp__…` prefix so they route to the Slack MCP server.
+
+**Cursor vs this API**
+
+| Surface | Auth for Slack MCP |
+|--------|---------------------|
+| **Cursor IDE** | Add Slack MCP in MCP settings; OAuth is handled interactively ([Slack + Cursor](https://docs.slack.dev/ai/slack-mcp-server/connect-to-cursor/)). |
+| **This FastAPI service** | You must supply credentials the HTTP client can send on each request, typically `SLACK_MCP_BEARER_TOKEN` (or `SLACK_MCP_AUTH_HEADER` + `SLACK_MCP_AUTH_VALUE`). Hosted `https://mcp.slack.com/mcp` expects a valid bearer from your approved OAuth or gateway flow—there is no interactive “Connect” button in the server process. |
+
+**Identity mapping (Slack MCP only):** `utilities/identity_mapping.py` exposes `SlackMCPIdentityMapper`, which discovers an email lookup tool from Slack `tools/list` (or uses `SLACK_MCP_EMAIL_LOOKUP_TOOL`) and resolves a workbook owner email to a Slack user id. It is wired into `McpTranslationLayer` for `translation_key` `email_to_slack_user_id` in the orchestration binding pipeline.
+
+**Plan-then-execute API:** `POST /orchestration/plan-execute` with body `{"user_goal": "…", "constraints": {}}` runs `LLMTaskPlanner` → `PlanSchemaValidator` → `BindingResolver` → `MCPRouter` (see package `orchestration/`). This is MCP-only planning and execution, separate from the conversational `/mcp-chat` loop.
+
+Environment variables are documented in [.env_template](.env_template) under Slack MCP.
+
 ## Slack bot
 
 Optional Socket Mode integration: see [README_SLACK.md](README_SLACK.md).

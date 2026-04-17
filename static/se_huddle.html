@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SE Huddle — Tableau admin agent (one-pager)</title>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #4a4a4a;
+      --line: #e0e0e0;
+      --bg: #fafafa;
+      --card: #ffffff;
+      --accent: #c75d00;
+      --accent-soft: #fff4e8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 1rem;
+      line-height: 1.55;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    .wrap {
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    header {
+      border-bottom: 3px solid var(--accent);
+      padding-bottom: 1rem;
+      margin-bottom: 1.75rem;
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 700;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 0;
+    }
+    h2 {
+      font-size: 1.15rem;
+      margin: 1.75rem 0 0.65rem;
+      color: var(--ink);
+      font-weight: 650;
+    }
+    h2:first-of-type { margin-top: 0.25rem; }
+    ul {
+      margin: 0.4rem 0 0;
+      padding-left: 1.2rem;
+    }
+    li { margin: 0.35rem 0; }
+    .callout {
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      padding: 0.85rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .muted-box {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin: 0.75rem 0;
+    }
+    .muted-box strong { display: block; margin-bottom: 0.35rem; }
+    p.lead {
+      font-size: 1.05rem;
+      margin: 0 0 1rem;
+      color: var(--ink);
+    }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Bridge agent: Tableau + Slack</h1>
+      <p class="sub">One-pager for Solutions Engineers — plain language, customer-ready framing</p>
+    </header>
+
+    <p class="lead">
+      This is a <strong>helper that works in chat</strong> (for example from Slack). It can look up Tableau Cloud details, take admin actions you allow, and send clear updates back to the right people — without asking an admin to click through many screens for every request.
+    </p>
+
+    <h2>How it works (simple version)</h2>
+    <ul>
+      <li>You describe what you want in everyday words.</li>
+      <li>The helper plans which <em>official</em> Tableau and Slack capabilities to use.</li>
+      <li>It runs those steps in order, passes results along, and can explain what it found in plain English.</li>
+      <li>Slack is optional but powerful: the same flow can notify owners, ask for approval, or post a summary where your team already works.</li>
+    </ul>
+
+    <h2>Why customers care</h2>
+    <ul>
+      <li><strong>Less busywork for admins.</strong></li>
+      <li><strong>Faster answers for the business users.</strong></li>
+      <li><strong>HR can take on Tableau Adminstrative tasks.</strong></li>
+    </ul>
+
+    <h2>Use cases we were exploring</h2>
+    <ul>
+      <li><strong>Managing users and groups from Slack.</strong> Add or adjust membership, confirm who is in a group, or route a request to the right admin channel — without opening a separate admin session for every small change.</li>
+      <li><strong>Managing permissions to content from Slack.</strong> Grant or review access when someone asks in a thread; the helper can align Tableau permissions with the conversation.</li>
+      <li>
+        <strong>“Who can see the ‘Salary Data’ workbook — and why?”</strong>
+        <div class="muted-box">
+          <strong>Why this is hard in the product alone</strong>
+          Effective access often comes from several places at once (direct access, project permissions, group membership, possibly site roles). Today an admin typically pieces this together by opening the workbook, permissions, groups, and sometimes user lists — a lot of tabs and mental notes. There is not one screen that always answers “everyone + every reason” in one narrative.
+        </div>
+      </li>
+      <li>
+        <strong>Which extract refresh is using the most resources, and did it delay higher-priority work?</strong>
+        <div class="muted-box">
+          <strong>How an admin usually figures this out in Tableau today</strong>
+          They start with <strong>background tasks</strong> or job-related admin views (timing, success, duration). To see contention, they often compare schedules, concurrency, and site limits, and may need <strong>Custom Admin Views</strong>, server monitoring, or logs — depending on Cloud vs Server and what is enabled. There is rarely a single “this job delayed these exact jobs” button; it is detective work across task history, schedules, and sometimes external monitoring.
+        </div>
+        The helper’s angle is to <strong>pull the relevant task and schedule context together</strong> and summarize impact in one answer admins can act on or forward.
+      </li>
+      <li>
+        <strong>Stale or unused content, with Slack approval to remove.</strong>
+        Find old or rarely used workbooks and data sources, then <strong>message owners in Slack</strong> with a short summary and a yes/no (or link) so cleanup moves forward without another spreadsheet round-trip.
+      </li>
+    </ul>
+
+    <h2>Fewer steps than “just use the interface”</h2>
+    <ul>
+      <li>One ask in chat instead of many clicks across Users, Groups, Content, Jobs, and email.</li>
+      <li>The helper remembers the thread of the task: look up → interpret → message — without the admin re-explaining context each time.</li>
+      <li>Value is not “replace Tableau”; it is <strong>shorten the path</strong> from question to confident action (or to a clear “here is what we need from IT”).</li>
+    </ul>
+
+    <div class="callout">
+      <strong>Narrative for customers (the “build onto what you bought” conversation)</strong>
+      <p style="margin:0.5rem 0 0;">
+        Tableau Cloud is the system of record for analytics and governance. This pattern is an <strong>optional layer</strong>: same security boundaries, same APIs and admin capabilities your team already trusts — organized as a conversational assistant so routine governance and communication happen faster. Position it as <strong>customizing the last mile</strong> (how questions get asked and answered in your org), not replacing the platform. That keeps procurement and IT comfortable: you are extending workflows, not introducing a second place where data lives.
+      </p>
+    </div>
+
+    <h2>What Solutions Engineers can say to customers</h2>
+    <ul>
+      <li>“This fits where you already use Slack (or Teams) for approvals and chatter.”</li>
+      <li>“It reduces ‘swivel chair’ between Tableau admin and email or chat.”</li>
+      <li>“You control which actions are allowed; it is automation of allowed steps, not a black box.”</li>
+      <li>“It is a reference pattern you can start small — one use case — then grow.”</li>
+    </ul>
+
+    <h2>Could you build something similar? (Yes — and it can feel approachable)</h2>
+    <p style="margin:0.4rem 0 0.6rem;">Other Tableau SEs can use tools like <strong>Cursor</strong> or <strong>Claude Code</strong> as a coding partner to:</p>
+    <ul>
+      <li>Start from a <strong>starter kit</strong> or a thin FastAPI (or similar) app that exposes one chat endpoint.</li>
+      <li>Connect to <strong>Tableau’s supported admin APIs</strong> and, if needed, a <strong>Slack bot</strong> for posting and reading commands.</li>
+      <li>Let the model choose steps from <strong>well-described “tools”</strong> (each tool wraps one API or one MCP action) instead of hard-coding one workflow per customer story.</li>
+      <li>Iterate in a loop: one real customer question → wire the minimum tools → demo → refine prompts and guardrails.</li>
+    </ul>
+    <p style="margin:0.75rem 0 0;">
+      The “wow, that is not that hard” moment is usually when someone sees <strong>one end-to-end flow</strong> (for example, “list stale workbooks and draft a Slack message”) built from a small number of files and clear environment variables — not a giant custom product.
+    </p>
+
+    <h2>Positioning for your customer conversations</h2>
+    <ul>
+      <li>Lead with <strong>time saved for admins and content owners</strong>, not model names.</li>
+      <li>Pair each story with <strong>one measurable outcome</strong> (for example, time to answer “who has access?” or time to get sign-off to archive).</li>
+      <li>Offer a <strong>pilot scope</strong>: read-only questions first, then a short list of write actions after security review.</li>
+      <li>Emphasize <strong>governance stays in Tableau</strong>; chat is where the work gets coordinated.</li>
+    </ul>
+
+    <footer>
+      Internal reference — Tableau admin + Slack bridge agent starter. Open this page at <code>http://localhost:8000/SEHuddle</code> while the app is running.
+    </footer>
+  </div>
+</body>
+</html>
