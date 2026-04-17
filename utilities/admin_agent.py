@@ -132,6 +132,7 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Multi-step operations are fine (e.g., get user ID first, then update)
 - Track conversation context - don't ask for the same info twice
 - Present results clearly and concisely
+- **Email scope:** For add/remove/update site users, only use email addresses the **user explicitly wrote in their current request** (or the assistant’s immediate prior question you are answering). Do not add extra people from much older messages, bot identity, or unrelated context when confirming or asking for site roles.
 
 **Data sources, workbooks, and content (not only users/groups):** The MCP catalog often includes content and data tools (names vary by server), such as **`list-datasources`**, **`list-workbooks`**, **`query-datasource`**, **`get-datasource-metadata`**, **`search-content`**, etc. For requests like "list all datasources" or "what data sources exist", **search your available tool names and descriptions** for datasource/workbook/query/list patterns and **invoke the matching tool**. Only say a capability is unavailable if **no** such tool appears after you have checked the full list—and then say clearly that the **MCP server did not expose** that tool (e.g. `INCLUDE_TOOLS` / tool groups on the host), not that Tableau lacks the feature.
 
@@ -511,15 +512,30 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
     If the query looks like a simple follow-up answer (e.g., just a role),
     augment it with context from the conversation history
     """
+    import difflib
     import re
 
     query_lower = query.lower().strip()
+    query_tok = query_lower.strip()
 
     # Check if query is just a site role (common follow-up pattern)
     role_keywords = ['viewer', 'explorer', 'creator', 'unlicensed', 'explorercanpublish',
                      'siteadministrator', 'siteadministratorexplorer', 'siteadministratorcreator']
 
-    is_just_role = any(role in query_lower for role in role_keywords) and len(query.split()) <= 3
+    short_followup = len(query.split()) <= 4
+    role_exact = any(role in query_lower for role in role_keywords)
+    role_fuzzy = bool(
+        re.search(r"\b(viewer|viewers|creator|creators|unlicensed)\b", query_lower)
+    ) or bool(re.search(r"\b(site\s*admin\w*|explorercanpublish)\b", query_lower))
+    # Typo-tolerant single token (e.g. "explolrers" ~ explorer)
+    role_close = False
+    if short_followup and len(query.split()) <= 3 and query_tok:
+        canon = [
+            "viewer", "explorer", "creator", "unlicensed", "explorercanpublish",
+            "siteadministratorexplorer", "siteadministratorcreator",
+        ]
+        role_close = bool(difflib.get_close_matches(query_tok, canon, n=1, cutoff=0.72))
+    is_just_role = short_followup and (role_exact or role_fuzzy or role_close)
 
     if is_just_role and conversation_history:
         # This looks like a follow-up answer to a question
@@ -584,24 +600,34 @@ def _extract_all_emails_from_text(text: str) -> List[str]:
 
 
 def _merged_user_text_for_email_guards(
-    current_query: str, conversation_history: Optional[List[Dict[str, Any]]], max_turns: int = 24
+    current_query: str,
+    conversation_history: Optional[List[Dict[str, Any]]],
+    max_user_messages: int = 3,
 ) -> str:
-    """Recent user utterances + current message (used so follow-ups like \"viewer\" still see prior emails)."""
+    """
+    Current message + a few most recent user turns only.
+    Do not scan the entire thread — that pulled unrelated emails into add/remove flows.
+    """
     parts = [current_query or ""]
-    for m in (conversation_history or [])[-max_turns:]:
-        if m.get("role") == "user":
-            parts.append(str(m.get("content") or ""))
+    n = 0
+    for m in reversed(conversation_history or []):
+        if m.get("role") != "user":
+            continue
+        parts.append(str(m.get("content") or ""))
+        n += 1
+        if n >= max_user_messages:
+            break
     return "\n".join(parts)
 
 
 def _extract_session_user_emails(
     current_user_message: str,
     conversation_history: Optional[List[Dict[str, Any]]],
-    max_turns: int = 24,
+    max_user_messages: int = 3,
 ) -> List[str]:
-    """All unique emails from recent user turns and the current user message."""
+    """Emails from current message + last few user turns (narrow window for safety guards)."""
     return _extract_all_emails_from_text(
-        _merged_user_text_for_email_guards(current_user_message, conversation_history, max_turns)
+        _merged_user_text_for_email_guards(current_user_message, conversation_history, max_user_messages)
     )
 
 
@@ -673,12 +699,12 @@ async def admin_mcp_chat(query: str, conversation_history: List[Dict] = None) ->
     if query != original_query:
         print(f"✨ Query augmented to: '{query}'")
 
-    # Multi-email scope = augmented query ∪ recent user messages (follow-ups often omit addresses)
+    # Multi-email scope = augmented query ONLY (do not union whole-thread user emails — that
+    # incorrectly included unrelated addresses from old turns in site-role / add-user prompts).
     emails_augmented = _extract_all_emails_from_text(query)
-    emails_session = _extract_session_user_emails(original_query, conversation_history)
-    all_emails_in_query = list(dict.fromkeys(list(emails_augmented) + list(emails_session)))
+    all_emails_in_query = list(dict.fromkeys(emails_augmented))
     if len(all_emails_in_query) > 1:
-        print(f"🔍 MULTI-EMAIL SESSION: {len(all_emails_in_query)} addresses in scope: {all_emails_in_query}")
+        print(f"🔍 MULTI-EMAIL (this turn / augmented): {len(all_emails_in_query)} addresses: {all_emails_in_query}")
 
     try:
         tableau_username = TABLEAU_USER if MCP_JWT_SUB_CLAIM_HEADER else None
