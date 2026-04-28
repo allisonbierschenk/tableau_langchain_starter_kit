@@ -71,6 +71,42 @@
       margin: 0.75rem 0;
     }
     .muted-box strong { display: block; margin-bottom: 0.35rem; }
+    ol.scenarios {
+      margin: 0.5rem 0 0;
+      padding-left: 1.35rem;
+    }
+    ol.scenarios > li {
+      margin: 1.1rem 0;
+    }
+    ol.scenarios .ask {
+      font-weight: 650;
+      margin-bottom: 0.35rem;
+    }
+    .without {
+      font-size: 0.92rem;
+      color: var(--muted);
+      margin: 0.35rem 0 0;
+      padding-left: 0;
+      list-style: none;
+    }
+    .without::before {
+      content: "Without the agent (Tableau Cloud admin): ";
+      font-weight: 650;
+      color: var(--ink);
+    }
+    .future-tag {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: var(--line);
+      color: var(--ink);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      margin-left: 0.35rem;
+      vertical-align: middle;
+    }
     p.lead {
       font-size: 1.05rem;
       margin: 0 0 1rem;
@@ -102,15 +138,52 @@
       <li>You describe what you want in everyday words.</li>
       <li>The helper plans which <em>official</em> Tableau and Slack capabilities to use.</li>
       <li>It runs those steps in order, passes results along, and can explain what it found in plain English.</li>
-      <li>Slack is optional but powerful: the same flow can notify owners, ask for approval, or post a summary where your team already works.</li>
+      <li>Slack is optional but powerful: the same flow can notify owners, ask for approval, or post a summary where teams already work.</li>
     </ul>
 
-    <h2>Why customers care</h2>
+    <h2>Why our customers care</h2>
     <ul>
-      <li><strong>Less busywork for admins.</strong></li>
-      <li><strong>Faster answers for the business users.</strong></li>
-      <li><strong>HR can take on Tableau Adminstrative tasks.</strong></li>
+      <li><strong>Volume of small admin requests.</strong> Site roles, invites, and permission tweaks arrive as one-off emails or chat pings. Each one is simple, but together they eat the week.</li>
+      <li><strong>Answers are scattered across screens.</strong> “Who can see this?” and “what is slowing refreshes?” need data from more than one place. Customers pay for that detective work in time and delay.</li>
+      <li><strong>Faster turnaround for the business.</strong> Leaders want a same-day answer, not a ticket queue. When the path is shorter, analytics governance keeps pace with how fast the org moves.</li>
+      <li><strong>Clearer stories for audit and trust.</strong> Stakeholders want a plain explanation (“why does this person have access?”), not a tour of every permissions dialog.</li>
+      <li><strong>Work happens where people already collaborate.</strong> If approvals and questions live in Slack (or similar), jumping only into Tableau for every step feels like extra friction.</li>
+      <li><strong>Stretching who can help (with guardrails).</strong> With the right limits and templates, trusted partners (for example HR or a business operations team) can run <em>approved</em> user and access tasks so central IT is not the only bottleneck — without giving away full site admin keys casually.</li>
     </ul>
+
+    <h2>Example asks — and how a Cloud admin gets there today (no agent)</h2>
+    <p style="margin-top:0.25rem;">Below, each line is a <strong>natural-language ask</strong> the bridge agent is built for. The gray line is what a <strong>Tableau Cloud site or server admin</strong> typically does <em>without</em> this helper.</p>
+
+    <ol class="scenarios">
+      <li>
+        <div class="ask">Add <code>admina@admin.com</code> and <code>adminb@admin.com</code> to the site as <strong>Explorers</strong>.</div>
+        <p class="without">Open the site → <strong>Users</strong> (or <strong>People</strong>, depending on your navigation) → <strong>Add users</strong> by email. If they are new to the site, complete the invite flow and assign site role <strong>Explorer</strong> for each. If your org uses automated provisioning (SCIM), the admin may instead confirm the identity provider sent the right role — still a separate check per person.</p>
+      </li>
+      <li>
+        <div class="ask">Change <code>admina@admin.com</code> and <code>adminb@admin.com</code> to site role <strong>Site Administrator Creator</strong>.</div>
+        <p class="without">Go to <strong>Users</strong> → find each user (search by email) → open their profile or row actions → <strong>Site role</strong> → select <strong>Site Administrator Creator</strong> → save. Repeat for the second user. If licenses or seat types matter in your tenant, confirm the change is allowed before saving.</p>
+      </li>
+      <li>
+        <div class="ask">Remove <code>admina@admin.com</code> and <code>adminb@admin.com</code> from the site.</div>
+        <p class="without">Go to <strong>Users</strong> → locate each user → <strong>Remove from site</strong> (wording may be “Remove user” or similar). If content is still owned by that user, the admin may need to reassign ownership first — another round of clicks and decisions per user.</p>
+      </li>
+      <li>
+        <div class="ask">List everyone who can use the <strong>‘Sales Data Historical’</strong> published data source and explain <strong>why</strong> they have access.</div>
+        <p class="without">Open <strong>Explore</strong> or <strong>Content</strong> → <strong>Data sources</strong> → open <strong>Sales Data Historical</strong> → <strong>Permissions</strong>. Read direct user rules and group rules. For each <strong>group</strong>, go to <strong>Groups</strong>, open the group, and list members. Check whether access is inherited from the <strong>project</strong> (project permissions and parent projects). There is no single Tableau screen that prints “all people + exact reason” in one narrative; the admin assembles it mentally or in a spreadsheet.</p>
+      </li>
+      <li>
+        <div class="ask">Which <strong>Tableau Pulse</strong> metrics is <code>jstiefeling@salesforce.com</code> subscribed to (following / notifications)?</div>
+        <p class="without">Pulse is experienced per metric and per person. An admin often starts from <strong>Pulse</strong> in the site: browse or search metrics, open a metric’s details, and inspect followers, subscriptions, or notification settings — or ask the user to show “metrics I follow.” Central “search all metrics this user follows in one table” is not always a single admin view; you may need to combine <strong>admin usage or adoption reporting</strong> (where your edition exposes Pulse activity) with spot checks in the Pulse UI.</p>
+      </li>
+      <li>
+        <div class="ask">Which <strong>extract refresh</strong> job is using the most resources right now, and <strong>has it delayed</strong> other high-priority tasks?</div>
+        <p class="without">Use <strong>Jobs</strong> (or <strong>Monitor</strong> → background tasks / extract tasks, depending on your Tableau Cloud navigation) to sort recent extract refreshes by duration, failure, or queue time. Cross-check <strong>schedules</strong> and site <strong>concurrency</strong> limits. To argue causally about “delayed” other work, the admin often compares overlapping time windows, priority schedules, and sometimes <strong>Admin Insights</strong> or <strong>Custom Admin Views</strong> — there is still no one button that says “Job A blocked Jobs B and C.”</p>
+      </li>
+      <li>
+        <div class="ask">Find <strong>stale</strong> workbooks (not used in 6 months), <strong>exclude</strong> anything that looks like an <strong>‘Annual’</strong> report, and <strong>draft a Slack message per owner</strong> asking for Keep or Delete.<span class="future-tag">Future state</span></div>
+        <p class="without">Use <strong>content inventory</strong> plus usage signals (for example views from <strong>Admin Insights</strong>, <strong>Custom Admin Views</strong>, or governance exports, depending on what is enabled). Filter or exclude “Annual” by name in a spreadsheet or repeated UI filters. Identify the <strong>owner</strong> per workbook. Then, outside Tableau, compose and send individual Slack (or email) messages — or one channel post that still needs manual follow-up so nothing is archived by mistake.</p>
+      </li>
+    </ol>
 
     <h2>Use cases we were exploring</h2>
     <ul>
