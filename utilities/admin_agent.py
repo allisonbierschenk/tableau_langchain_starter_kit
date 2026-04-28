@@ -540,6 +540,35 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
     if is_just_role and conversation_history:
         # This looks like a follow-up answer to a question
         # Check if the most recent assistant message was asking for a site role
+
+        # First, check if there's an email in the most recent user messages (last 2 turns)
+        # This takes priority over old conversation history
+        recent_user_emails = []
+        user_msg_count = 0
+        for msg in reversed(conversation_history):
+            if msg.get("role") == "user":
+                user_content = msg.get("content", "")
+                if user_content and "add" in user_content.lower():
+                    # This is an "add user" request - extract email
+                    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                    found_emails = re.findall(email_pattern, user_content)
+                    recent_user_emails.extend(found_emails)
+                user_msg_count += 1
+                if user_msg_count >= 2:  # Only look at last 2 user messages
+                    break
+
+        # If we found emails in recent user messages, use those
+        if recent_user_emails:
+            unique_recent = list(dict.fromkeys(recent_user_emails))  # Preserve order, remove dupes
+            if len(unique_recent) == 1:
+                augmented_query = f"Add user {unique_recent[0]} with site role {query}"
+            else:
+                email_list = ", ".join(unique_recent)
+                augmented_query = f"Add users {email_list} with site role {query}"
+            print(f"🔍 Context from recent user messages - Augmented query: '{augmented_query}'")
+            return augmented_query
+
+        # Fallback: check the most recent assistant message (only if no recent user emails found)
         for msg in reversed(conversation_history):
             if (msg.get("role") or "").lower() != "assistant":
                 continue
@@ -568,7 +597,7 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
                     else:
                         email_list = ", ".join(unique_emails)
                         augmented_query = f"Add users {email_list} with site role {query}"
-                    print(f"🔍 Context detected - Augmented query: '{augmented_query}'")
+                    print(f"🔍 Context from assistant question - Augmented query: '{augmented_query}'")
                     return augmented_query
 
             break  # Only inspect the most recent assistant message
