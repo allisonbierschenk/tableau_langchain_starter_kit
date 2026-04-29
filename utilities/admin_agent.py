@@ -1230,6 +1230,11 @@ Available site role options:
                         if operation == "remove-user-from-site":
                             print(f"   🗑️  Attempting to remove user ID: {tool_args.get('userId', 'MISSING')}")
 
+                    # Log Pulse operations for debugging metric name issues
+                    if "pulse" in native_name.lower():
+                        operation = tool_args.get("operation", "N/A")
+                        print(f"   🔔 Pulse operation: {operation}")
+
                     # VALIDATION: Block placeholder emails in tool calls (add-user-to-site or admin-users)
                     if _is_add_user_to_site_call(tool_name, tool_args):
                         user_name = _get_add_user_email_from_tool_args(tool_args)
@@ -1292,7 +1297,12 @@ Available site role options:
                     if tool_result is None:
                         tool_result = f"Tool {tool_name} not found"
 
-                    print(f"   Result: {tool_result[:200]}...")
+                    # Log full Pulse results for debugging metric name extraction
+                    if "pulse" in native_name.lower() and not ("error" in str(tool_result).lower() or "iserror" in str(tool_result).lower()):
+                        print(f"   🔔 Full Pulse result (for debugging):")
+                        print(f"   {tool_result[:1000]}")
+                    else:
+                        print(f"   Result: {tool_result[:200]}...")
 
                     # Enhanced error detection for user removal
                     if native_name == "admin-users" and tool_args.get("operation") == "remove-user-from-site":
@@ -1319,6 +1329,10 @@ Available site role options:
                         "arguments": tool_args,
                         "result": tool_result
                     })
+
+                    # Log Pulse tool results being added for metric name extraction debugging
+                    if "pulse" in tool_name.lower():
+                        print(f"   📊 Added Pulse tool result to extraction pool (tool #{len(tool_results)})")
 
                     # Add tool result to messages
                     messages.append(
