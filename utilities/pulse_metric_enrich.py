@@ -24,9 +24,14 @@ def _is_uuid(s: str) -> bool:
     return bool(s and _UUID.fullmatch(s.strip()))
 
 
-def _walk_pulse_id_names(obj: Any, acc: Dict[str, str]) -> None:
+def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None:
     """Collect lowercase UUID -> display name from nested Pulse-like JSON."""
     if isinstance(obj, dict):
+        # Log potential subscription objects for debugging
+        if _depth == 0 and ("metricDefinitionId" in obj or "subscriptionId" in obj):
+            keys = list(obj.keys())
+            print(f"🔍 Found subscription-like object with keys: {keys[:10]}")
+
         for nested_key in ("metricDefinition", "metric", "pulseMetric", "pulseMetricDefinition"):
             md = obj.get(nested_key)
             if isinstance(md, dict):
@@ -59,10 +64,10 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str]) -> None:
                 acc[v.lower()] = nm.strip()
 
         for val in obj.values():
-            _walk_pulse_id_names(val, acc)
+            _walk_pulse_id_names(val, acc, _depth + 1)
     elif isinstance(obj, list):
         for item in obj:
-            _walk_pulse_id_names(item, acc)
+            _walk_pulse_id_names(item, acc, _depth + 1)
 
 
 def _iter_json_roots_from_tool_result(tr: Dict[str, Any]) -> List[Any]:
@@ -233,8 +238,17 @@ def extract_pulse_metric_id_to_name(tool_results: Optional[List[Dict[str, Any]]]
     """Build map metric-uuid (lowercase) -> human-readable name from all tool results."""
     out: Dict[str, str] = {}
     for tr in tool_results or []:
+        tool_name = tr.get("tool", "unknown")
         for root in _iter_json_roots_from_tool_result(tr):
+            before = len(out)
             _walk_pulse_id_names(root, out)
+            after = len(out)
+            if after > before:
+                print(f"📊 Extracted {after - before} Pulse metric names from {tool_name}")
+    if out:
+        print(f"📊 Total extracted metric names: {len(out)}")
+        for mid, mname in list(out.items())[:3]:
+            print(f"   - {mid[:8]}... → {mname}")
     return out
 
 

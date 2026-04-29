@@ -1172,6 +1172,11 @@ Available site role options:
 
                     pulse_map = extract_pulse_metric_id_to_name(tool_results)
                     uuids_in_answer = metric_uuids_candidates_in_response(final_response)
+
+                    print(f"📊 Pulse enrichment check:")
+                    print(f"   - Found {len(pulse_map)} metric names in tool results: {list(pulse_map.keys())[:3]}")
+                    print(f"   - Found {len(uuids_in_answer)} UUIDs in response")
+
                     more_names = await backfill_pulse_id_names_via_mcp(
                         admin_client,
                         tableau_mcp_tools,
@@ -1179,12 +1184,18 @@ Available site role options:
                         pulse_map,
                     )
                     if more_names:
+                        print(f"   - Backfill added {len(more_names)} more names")
                         pulse_map = {**pulse_map, **more_names}
                     if pulse_map:
+                        print(f"   - Total pulse_map size: {len(pulse_map)}")
                         enriched = enrich_assistant_text_pulse_metric_names(final_response, pulse_map)
                         if enriched != final_response:
-                            print("📊 Enriched reply with Pulse metric names (tool JSON and/or catalog backfill)")
+                            print("   ✅ Enriched reply with Pulse metric names")
+                        else:
+                            print("   ⚠️ No enrichment applied (pattern mismatch or names already present)")
                         final_response = enriched
+                    else:
+                        print("   ⚠️ pulse_map is empty - no enrichment possible")
                     if uuids_in_answer:
                         final_response = scrub_stale_pulse_api_disclaimer(
                             final_response, uuids_in_answer, pulse_map
