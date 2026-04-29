@@ -99,8 +99,12 @@ _CRITICAL_CONVERSATION_RULE = """
 - ❌ "What email address?" after user provides the role
 - ❌ Asking for information you already mentioned
 - ❌ Treating each message as isolated without context
+- ❌ LISTING EXISTING USERS WITH THAT ROLE (this is wrong! The user wants to ADD, not list!)
+- ❌ Calling list-users, get-users-on-site, or any query tool after user provides a role in response to your question
 
 **YOUR PREVIOUS MESSAGES CONTAIN THE CONTEXT YOU NEED!**
+
+**CRITICAL: If you just asked "What site role for [emails]?" and user responds with a role, you MUST call add-user-to-site for those emails. DO NOT list existing users, DO NOT query anything - just ADD the users!**
 """
 
 ADMIN_SYSTEM_PROMPT = """You are a helpful Tableau Cloud administrator assistant with access to MCP tools.
@@ -134,6 +138,7 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Multi-step operations are fine (e.g., get user ID first, then update)
 - Track conversation context - don’t ask for the same info twice
 - Present results clearly and concisely
+- **CRITICAL ADD-USER FLOW:** If you asked "What site role should be assigned to [email addresses]?" and the user responds with a role name (viewer, explorer, creator, etc.), you MUST immediately call add-user-to-site for those email addresses. DO NOT list existing users with that role. DO NOT query for users. The user is answering YOUR question about which role to assign to NEW users being added.
 - **Be thorough, not lazy:** If the user asks "list every user who...", they want the complete enumerated list, not "Group X has access, feel free to ask for details." Call the necessary tools to expand groups, resolve IDs, and provide the complete answer in your first response. Don’t make the user ask follow-up questions for basic information you could have fetched.
 - **Pronouns and references (them, these, those, both):** When the user says "update **them**" or "remove **these users**" or "change **both** to creator", the pronoun refers to the users/groups from your MOST RECENT successful operation in THIS conversation. Look at your last assistant message - if you just added/listed multiple users, "them" = ALL those users, not just one. Example: You added admina@admin.com and adminb@admin.com → user says "update them to creator" → update BOTH users, not just one.
 - **Looking up users by email (critical fallback strategy):** When you need to find a user ID from an email (e.g., for Pulse queries, updates), use this THREE-STEP approach:
@@ -791,10 +796,10 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
         if recent_user_emails:
             unique_recent = list(dict.fromkeys(recent_user_emails))  # Preserve order, remove dupes
             if len(unique_recent) == 1:
-                augmented_query = f"Add user {unique_recent[0]} with site role {query}"
+                augmented_query = f"Add user {unique_recent[0]} to the site as a {query}"
             else:
                 email_list = ", ".join(unique_recent)
-                augmented_query = f"Add users {email_list} with site role {query}"
+                augmented_query = f"Add these users to the site as {query}: {email_list}"
             print(f"🔍 Context from recent user messages - Augmented query: '{augmented_query}'")
             return augmented_query
 
@@ -823,10 +828,10 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
 
                 if unique_emails:
                     if len(unique_emails) == 1:
-                        augmented_query = f"Add user {unique_emails[0]} with site role {query}"
+                        augmented_query = f"Add user {unique_emails[0]} to the site as a {query}"
                     else:
                         email_list = ", ".join(unique_emails)
-                        augmented_query = f"Add users {email_list} with site role {query}"
+                        augmented_query = f"Add these users to the site as {query}: {email_list}"
                     print(f"🔍 Context from assistant question - Augmented query: '{augmented_query}'")
                     return augmented_query
 
