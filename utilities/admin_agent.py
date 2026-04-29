@@ -661,11 +661,32 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
                 emails = re.findall(email_pattern, content)
                 if emails:
                     unique_emails = list(dict.fromkeys(emails))  # Preserve order, remove dupes
+
+                    # Rewrite query to be explicit about the action
+                    # "change them to explorers" → "update users A, B to role explorers"
+                    # "remove them" → "remove users A, B from site"
+                    # "update them to creator" → "update users A, B to role creator"
+
                     if len(unique_emails) == 1:
-                        augmented_query = f"{query} for user {unique_emails[0]}"
+                        user_part = f"user {unique_emails[0]}"
                     else:
                         email_list = ", ".join(unique_emails)
-                        augmented_query = f"{query} for users {email_list}"
+                        user_part = f"users {email_list}"
+
+                    # Parse the action from the query
+                    if "change" in query_lower or "update" in query_lower or "modify" in query_lower or "set" in query_lower:
+                        # Extract the target (e.g., "to explorers", "to creator")
+                        if " to " in query_lower:
+                            target = query.split(" to ", 1)[1].strip()
+                            augmented_query = f"update {user_part} to role {target}"
+                        else:
+                            augmented_query = f"update {user_part} {query}"
+                    elif "remove" in query_lower or "delete" in query_lower:
+                        augmented_query = f"remove {user_part} from site"
+                    else:
+                        # Fallback: just append
+                        augmented_query = f"{query} for {user_part}"
+
                     print(f"🔍 Pronoun reference resolved - Augmented query: '{augmented_query}'")
                     return augmented_query
 
