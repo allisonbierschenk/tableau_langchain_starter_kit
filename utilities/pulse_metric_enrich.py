@@ -38,9 +38,9 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
             mid = obj.get("id")
             spec = obj.get("specification")
 
-            # DEBUG: Show what we're looking at
-            if _depth == 0 and isinstance(mid, str) and _is_uuid(str(mid)):
-                print(f"🔍 Found metric object: id={mid[:8]}...")
+            # DEBUG: Show what we're looking at (ANY depth, not just 0)
+            if isinstance(mid, str) and _is_uuid(str(mid)):
+                print(f"🔍 Found metric object (depth={_depth}): id={mid[:8]}...")
                 print(f"   specification type: {type(spec).__name__}")
                 if isinstance(spec, dict):
                     print(f"   specification keys: {list(spec.keys())[:10]}")
@@ -49,6 +49,8 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                     if isinstance(basic, dict):
                         print(f"   specification.basic keys: {list(basic.keys())}")
                         print(f"   specification.basic.name: {basic.get('name')}")
+                    else:
+                        print(f"   ⚠️ specification.basic is not a dict!")
 
             if isinstance(mid, str) and _is_uuid(str(mid)) and isinstance(spec, dict):
                 # Try specification.basic.name (Pulse API v1 pattern)
@@ -60,8 +62,11 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                 if isinstance(nm, str) and nm.strip():
                     acc[str(mid).lower()] = nm.strip()
                     print(f"📊 Extracted: {mid[:8]}... → {nm.strip()}")
-                elif _depth == 0:
-                    print(f"⚠️ No name found for metric {mid[:8]}... (checked basic.name, spec.name, spec.title, obj.name, obj.title)")
+                else:
+                    print(f"⚠️ No name found for metric {mid[:8]}... at depth {_depth}")
+                    print(f"   Checked: basic.name={basic.get('name') if isinstance(basic, dict) else 'N/A'}")
+                    print(f"   Checked: spec.name={spec.get('name') if isinstance(spec, dict) else 'N/A'}")
+                    print(f"   Checked: spec.title={spec.get('title') if isinstance(spec, dict) else 'N/A'}")
 
         # PATTERN 2: Nested metricDefinition/metric objects (legacy pattern)
         for nested_key in ("metricDefinition", "metric", "pulseMetric", "pulseMetricDefinition"):
