@@ -633,6 +633,56 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
         role_close = bool(difflib.get_close_matches(query_tok, canon, n=1, cutoff=0.72))
     is_just_role = short_followup and (role_exact or role_fuzzy or role_close)
 
+    # FIRST: Check if query has explicit emails that we might have IDs for from recent messages
+    # Example: "delete Abanana@Agmail.com and AAbanana@Agmail.com from the site"
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    emails_in_query = re.findall(email_pattern, query)
+
+    if emails_in_query and len(emails_in_query) >= 1 and conversation_history:
+        # User mentioned explicit email(s) - check if we have IDs for them from recent history
+        # Look back through recent assistant messages for these emails with their IDs
+        email_to_id = {}
+        user_msg_count = 0
+
+        for msg in reversed(conversation_history):
+            if msg.get("role") == "user":
+                user_msg_count += 1
+                if user_msg_count >= 3:  # Only look back 3 user messages
+                    break
+                continue
+
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                # Look for pattern: email (ID: uuid)
+                uuid_pattern = r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\s*\(ID:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)'
+                matches = re.findall(uuid_pattern, content, re.IGNORECASE)
+                for email, uid in matches:
+                    email_lower = email.lower()
+                    # Check if this email is in the query
+                    for query_email in emails_in_query:
+                        if query_email.lower() == email_lower:
+                            email_to_id[query_email] = uid
+
+        if email_to_id:
+            # We found IDs for some/all emails in the query - inject them
+            # Build augmented query by replacing each email (case-sensitive, once only)
+            augmented_query = query
+            for email in emails_in_query:
+                if email in email_to_id:
+                    # Replace this specific email occurrence with email + userId
+                    # Use a unique placeholder to avoid double-replacement
+                    placeholder = f"__EMAIL_PLACEHOLDER_{emails_in_query.index(email)}__"
+                    augmented_query = augmented_query.replace(email, placeholder, 1)
+
+            # Now replace placeholders with email+userId
+            for i, email in enumerate(emails_in_query):
+                if email in email_to_id:
+                    placeholder = f"__EMAIL_PLACEHOLDER_{i}__"
+                    augmented_query = augmented_query.replace(placeholder, f"{email} with userId {email_to_id[email]}")
+
+            print(f"🔍 Found IDs for {len(email_to_id)} emails in recent history - Augmented query: '{augmented_query}'")
+            return augmented_query
+
     # Check for pronoun-based follow-ups: "update them to creator", "change these to viewer", "remove both"
     pronoun_pattern = r'\b(them|these|those|both|all)\b'
     has_pronoun = bool(re.search(pronoun_pattern, query_lower))
