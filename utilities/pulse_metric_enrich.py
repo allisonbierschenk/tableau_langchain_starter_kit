@@ -32,6 +32,23 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
             keys = list(obj.keys())
             print(f"🔍 Found subscription-like object with keys: {keys[:10]}")
 
+        # PATTERN 1: Top-level objects with id + specification (batch-get-metrics response)
+        # Example: {"id": "uuid", "specification": {"basic": {"name": "Metric Name"}, ...}}
+        if "id" in obj and "specification" in obj:
+            mid = obj.get("id")
+            spec = obj.get("specification")
+            if isinstance(mid, str) and _is_uuid(str(mid)) and isinstance(spec, dict):
+                # Try specification.basic.name (Pulse API v1 pattern)
+                basic = spec.get("basic") or {}
+                nm = basic.get("name") if isinstance(basic, dict) else None
+                # Fallback: specification.name or top-level name
+                if not nm:
+                    nm = spec.get("name") or spec.get("title") or obj.get("name") or obj.get("title")
+                if isinstance(nm, str) and nm.strip():
+                    acc[str(mid).lower()] = nm.strip()
+                    print(f"📊 Extracted: {mid[:8]}... → {nm.strip()}")
+
+        # PATTERN 2: Nested metricDefinition/metric objects (legacy pattern)
         for nested_key in ("metricDefinition", "metric", "pulseMetric", "pulseMetricDefinition"):
             md = obj.get(nested_key)
             if isinstance(md, dict):
@@ -40,9 +57,11 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                 if isinstance(mid, str) and _is_uuid(str(mid)) and isinstance(nm, str) and nm.strip():
                     acc[str(mid).lower()] = nm.strip()
 
+        # PATTERN 3: Objects with metricDefinitionId/metricId + name at same level
         for key in (
             "metricDefinitionId",
             "metricId",
+            "metric_id",  # snake_case variant from list-subscriptions
             "pulseMetricId",
             "pulseDefinitionId",
             "definitionId",
@@ -60,8 +79,16 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                 or obj.get("specifiedName")
                 or obj.get("vizTitle")
             )
+            # Also check nested specification.basic.name for this ID
+            if not nm:
+                spec = obj.get("specification")
+                if isinstance(spec, dict):
+                    basic = spec.get("basic")
+                    if isinstance(basic, dict):
+                        nm = basic.get("name")
             if isinstance(nm, str) and nm.strip():
                 acc[v.lower()] = nm.strip()
+                print(f"📊 Extracted from ID field: {v[:8]}... → {nm.strip()}")
 
         for val in obj.values():
             _walk_pulse_id_names(val, acc, _depth + 1)
@@ -112,6 +139,13 @@ def _walk_broad_uuid_to_display_name(obj: Any, acc: Dict[str, str]) -> None:
             or obj.get("displayName")
             or obj.get("metricName")
         )
+        # Also check specification.basic.name for Pulse API v1
+        if not name and "specification" in obj:
+            spec = obj.get("specification")
+            if isinstance(spec, dict):
+                basic = spec.get("basic")
+                if isinstance(basic, dict):
+                    name = basic.get("name")
         if isinstance(oid, str) and _is_uuid(str(oid)) and isinstance(name, str) and name.strip():
             acc[str(oid).lower()] = name.strip()
         for val in obj.values():
