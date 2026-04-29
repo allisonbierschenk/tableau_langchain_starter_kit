@@ -258,9 +258,18 @@ If there are 100+ users, show the first 50 and say "Showing 50 of 127 users. Let
 **CRITICAL:** When showing group-based access, ALWAYS include the group name, not just the ID. Format as "Group: [Group Name] (ID: xxxxx)" or look up the group name using available tools if not in the permissions response.
 
 **Tableau Pulse metrics (mandatory):** When listing Pulse subscriptions or “which metrics” a user follows, every item must show **Metric name** (or equivalent title) and never be UUID-only.
+
+**CRITICAL - Correct Pulse operation names:**
+- To get user subscriptions: Use `admin-pulse` with operation `list-subscriptions` (NOT `list-subscriptions-for-user`)
+- To get metric names: Use `admin-pulse` with operation `batch-get-metrics` (NOT `metrics:batchGet`)
+- Required flow: First call `list-subscriptions` with `userId` → extract metric IDs → call `batch-get-metrics` with `metricIds` array
+- If an operation fails with “Invalid arguments”, try the alternative name (e.g., if `metrics:batchGet` fails, try `batch-get-metrics`)
+
+**Handling Pulse responses:**
 - **Incomplete / not allowed:** numbered bullets that only show `Metric ID: <uuid>` plus period/comparison.
-- **If subscription payloads are id-only:** follow Tableau Pulse REST patterns (see [Pulse REST](https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_ref_pulse.htm)): use MCP tools that list metric definitions/metrics in batch or site-wide (e.g. `list-all-pulse-metric-definitions`, or `definitions:batchGet` / `metrics:batchGet` equivalents exposed as tools) to resolve each LUID to its definition or metric display name before answering.
-- Prefer the same field names the MCP JSON uses (`metricDefinition.name`, `title`, `specifiedName`, etc.). If tool JSON already contains id+name pairs, your final answer must surface the name for each id.
+- Subscription responses contain `metric_id` field (snake_case) - extract these IDs
+- Batch-get-metrics responses have structure: `{“id”: “uuid”, “specification”: {“basic”: {“name”: “Metric Name”}}}`
+- Metric names are in `specification.basic.name` - the enrichment pipeline will append them automatically
 - **Getting user ID for Pulse queries:** Pulse APIs require user ID (LUID), not email. Use the THREE-STEP user lookup strategy (case-insensitive filter → exact filter → list all users) to find the user ID from the email. Do NOT give up after one failed lookup.
 
 **Tableau REST payloads (admin-users):** For `add-user-to-site`, follow the MCP `inputSchema` and Tableau REST: use nested `body.user.name` (sign-in email on Tableau Cloud) and `body.user.siteRole` with valid role names (e.g. Viewer, Unlicensed). Do not put `email` or `siteRole` at the top level of `body` unless the schema explicitly allows it.
@@ -1296,6 +1305,17 @@ Available site role options:
 
                     if tool_result is None:
                         tool_result = f"Tool {tool_name} not found"
+
+                    # Enhanced error detection for Pulse operation naming issues
+                    if "pulse" in native_name.lower() and "invalid arguments" in str(tool_result).lower():
+                        operation = tool_args.get("operation", "unknown")
+                        print(f"   ⚠️ Pulse operation '{operation}' failed with 'Invalid arguments'")
+
+                        # Provide helpful error message with correct operation names
+                        if "list-subscriptions" in operation:
+                            tool_result += "\n\nHINT: The correct operation name is 'list-subscriptions' (not 'list-subscriptions-for-user'). Retry with: admin-pulse operation='list-subscriptions' userId='<uuid>'"
+                        elif "batch" in operation and "get" in operation:
+                            tool_result += "\n\nHINT: Try operation='batch-get-metrics' with metricIds array (not 'metrics:batchGet')"
 
                     # Log full Pulse results for debugging metric name extraction
                     if "pulse" in native_name.lower() and not ("error" in str(tool_result).lower() or "iserror" in str(tool_result).lower()):
