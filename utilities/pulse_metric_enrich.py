@@ -113,16 +113,29 @@ def _iter_json_roots_from_tool_result(tr: Dict[str, Any]) -> List[Any]:
                 print(f"   ⚠️ JSON decode failed for string result: {e}")
     elif isinstance(r, dict):
         roots.append(r)
-        for i, block in enumerate(r.get("content") or []):
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text")
-                if isinstance(t, str) and t.strip().startswith(("{", "[")):
-                    try:
-                        parsed = json.loads(t)
-                        roots.append(parsed)
-                        print(f"   🔍 Parsed content[{i}].text as JSON: {type(parsed).__name__} with {len(parsed) if isinstance(parsed, (list, dict)) else '?'} items")
-                    except json.JSONDecodeError as e:
-                        print(f"   ⚠️ JSON decode failed for content[{i}].text: {str(e)[:100]}")
+        content_blocks = r.get("content") or []
+        print(f"   🔍 Dict result has {len(content_blocks)} content blocks")
+        for i, block in enumerate(content_blocks):
+            print(f"      Block {i}: type={type(block).__name__}, is_dict={isinstance(block, dict)}")
+            if isinstance(block, dict):
+                block_type = block.get("type")
+                print(f"      Block {i}: block.get('type')={block_type}")
+                if block_type == "text":
+                    t = block.get("text")
+                    print(f"      Block {i}: text type={type(t).__name__}, length={len(t) if isinstance(t, str) else 'N/A'}")
+                    if isinstance(t, str):
+                        t_trimmed = t.strip()
+                        starts_with = t_trimmed[:10] if len(t_trimmed) >= 10 else t_trimmed
+                        print(f"      Block {i}: starts with: '{starts_with}'")
+                        if t_trimmed.startswith(("{", "[")):
+                            try:
+                                parsed = json.loads(t)
+                                roots.append(parsed)
+                                print(f"   ✅ Parsed content[{i}].text as JSON: {type(parsed).__name__} with {len(parsed) if isinstance(parsed, (list, dict)) else '?'} items")
+                            except json.JSONDecodeError as e:
+                                print(f"   ⚠️ JSON decode failed for content[{i}].text: {str(e)[:100]}")
+                        else:
+                            print(f"      Block {i}: text doesn't start with {{ or [")
     elif isinstance(r, list):
         roots.append(r)
         print(f"   🔍 Result is already a list with {len(r)} items")
