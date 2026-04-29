@@ -135,6 +135,7 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Track conversation context - don’t ask for the same info twice
 - Present results clearly and concisely
 - **Be thorough, not lazy:** If the user asks "list every user who...", they want the complete enumerated list, not "Group X has access, feel free to ask for details." Call the necessary tools to expand groups, resolve IDs, and provide the complete answer in your first response. Don’t make the user ask follow-up questions for basic information you could have fetched.
+- **Pronouns and references (them, these, those, both):** When the user says "update **them**" or "remove **these users**" or "change **both** to creator", the pronoun refers to the users/groups from your MOST RECENT successful operation in THIS conversation. Look at your last assistant message - if you just added/listed multiple users, "them" = ALL those users, not just one. Example: You added admina@admin.com and adminb@admin.com → user says "update them to creator" → update BOTH users, not just one.
 - **Email scope:** For add/remove/update site users, only use email addresses the **user explicitly wrote in their current request** (or the assistant’s immediate prior question you are answering). Do not add extra people from much older messages, bot identity, or unrelated context when confirming or asking for site roles.
 - **Always include names with IDs:** When presenting groups, users, workbooks, datasources, projects, or any Tableau objects, ALWAYS show the human-readable name alongside the ID. Format as "Name (ID: xxxx)" or "Name - xxxx". Never show just an ID like "Group ID: 8056ebcd-..." without the group name. If the tool response includes a name field, use it. If not, call the appropriate get/list tool to resolve the ID to a name before presenting results to the user.
 
@@ -624,6 +625,39 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
         ]
         role_close = bool(difflib.get_close_matches(query_tok, canon, n=1, cutoff=0.72))
     is_just_role = short_followup and (role_exact or role_fuzzy or role_close)
+
+    # Check for pronoun-based follow-ups: "update them to creator", "change these to viewer", "remove both"
+    pronoun_pattern = r'\b(them|these|those|both|all)\b'
+    has_pronoun = bool(re.search(pronoun_pattern, query_lower))
+    action_pattern = r'\b(update|change|remove|delete|modify|set)\b'
+    has_action = bool(re.search(action_pattern, query_lower))
+
+    if has_pronoun and has_action and conversation_history:
+        # User is referring to users from the most recent operation
+        # Look for the most recent assistant message with successful add/update operations
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+
+        for msg in reversed(conversation_history):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "")
+            cl = content.lower()
+
+            # Look for success messages with email addresses
+            if ("successfully added" in cl or "have been successfully" in cl or "successfully updated" in cl):
+                emails = re.findall(email_pattern, content)
+                if emails:
+                    unique_emails = list(dict.fromkeys(emails))  # Preserve order, remove dupes
+                    if len(unique_emails) == 1:
+                        augmented_query = f"{query} for user {unique_emails[0]}"
+                    else:
+                        email_list = ", ".join(unique_emails)
+                        augmented_query = f"{query} for users {email_list}"
+                    print(f"🔍 Pronoun reference resolved - Augmented query: '{augmented_query}'")
+                    return augmented_query
+
+            # Stop at first assistant message (don't go too far back)
+            break
 
     if is_just_role and conversation_history:
         # This looks like a follow-up answer to a question
