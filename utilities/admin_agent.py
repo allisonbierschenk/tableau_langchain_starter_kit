@@ -136,7 +136,7 @@ You have access to MCP tools for Tableau Cloud administration. The exact tools a
 - Present results clearly and concisely
 - **Be thorough, not lazy:** If the user asks "list every user who...", they want the complete enumerated list, not "Group X has access, feel free to ask for details." Call the necessary tools to expand groups, resolve IDs, and provide the complete answer in your first response. Don’t make the user ask follow-up questions for basic information you could have fetched.
 - **Pronouns and references (them, these, those, both):** When the user says "update **them**" or "remove **these users**" or "change **both** to creator", the pronoun refers to the users/groups from your MOST RECENT successful operation in THIS conversation. Look at your last assistant message - if you just added/listed multiple users, "them" = ALL those users, not just one. Example: You added admina@admin.com and adminb@admin.com → user says "update them to creator" → update BOTH users, not just one.
-- **UPDATE operations with known emails:** When updating users you just added (e.g., "update users A, B to role creator"), you ALREADY have their emails from the add operation. Do NOT call get-users-on-site to look them up again - Tableau might not have indexed them yet. Instead, use the admin-users update operation with the emails directly. You may need to call get-users-on-site FIRST to get their user IDs, but pass the EXACT emails you were given, not variations.
+- **UPDATE operations with known emails:** When updating users you just added (e.g., "update users A, B to role creator"), you need their user IDs. Call `get-users-on-site` or `query-user-on-site` with filter EXACTLY matching the email case from the add operation. For EACH email separately: `filter=name:eq:Abanana@Agmail.com` (not name:ci:... which is case-insensitive and might not work). If a user is not found immediately after adding, wait 1-2 seconds and retry - Tableau needs time to index new users. Update each user individually with their ID.
 - **Email scope:** For add/remove/update site users, only use email addresses the **user explicitly wrote in their current request** (or the assistant’s immediate prior question you are answering). Do not add extra people from much older messages, bot identity, or unrelated context when confirming or asking for site roles.
 - **Always include names with IDs:** When presenting groups, users, workbooks, datasources, projects, or any Tableau objects, ALWAYS show the human-readable name alongside the ID. Format as "Name (ID: xxxx)" or "Name - xxxx". Never show just an ID like "Group ID: 8056ebcd-..." without the group name. If the tool response includes a name field, use it. If not, call the appropriate get/list tool to resolve the ID to a name before presenting results to the user.
 
@@ -663,16 +663,36 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
                 if emails:
                     unique_emails = list(dict.fromkeys(emails))  # Preserve order, remove dupes
 
-                    # Rewrite query to be explicit about the action
-                    # "change them to explorers" → "update users A, B to role explorers"
-                    # "remove them" → "remove users A, B from site"
-                    # "update them to creator" → "update users A, B to role creator"
+                    # Try to extract user IDs from the message (format: "email (ID: uuid)")
+                    # Example: "- Abanana@Agmail.com (ID: f4f84b90-6e10-4ad3-a776-8262d62394a2)"
+                    uuid_pattern = r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+                    user_ids = re.findall(uuid_pattern, content, re.IGNORECASE)
 
-                    if len(unique_emails) == 1:
-                        user_part = f"user {unique_emails[0]}"
+                    # Build email→ID mapping if we have both
+                    email_id_pairs = []
+                    if len(user_ids) >= len(unique_emails):
+                        for i, email in enumerate(unique_emails):
+                            if i < len(user_ids):
+                                email_id_pairs.append((email, user_ids[i]))
+
+                    # Rewrite query to be explicit about the action
+                    # "change them to explorers" → "update users A (ID: xxx), B (ID: yyy) to role explorers"
+
+                    if email_id_pairs:
+                        # Include IDs in the augmented query so LLM doesn't need to look them up
+                        if len(email_id_pairs) == 1:
+                            email, uid = email_id_pairs[0]
+                            user_part = f"user {email} with userId {uid}"
+                        else:
+                            pairs_str = ", ".join([f"{email} (userId: {uid})" for email, uid in email_id_pairs])
+                            user_part = f"users {pairs_str}"
                     else:
-                        email_list = ", ".join(unique_emails)
-                        user_part = f"users {email_list}"
+                        # Fallback: just emails
+                        if len(unique_emails) == 1:
+                            user_part = f"user {unique_emails[0]}"
+                        else:
+                            email_list = ", ".join(unique_emails)
+                            user_part = f"users {email_list}"
 
                     # Parse the action from the query
                     if "change" in query_lower or "update" in query_lower or "modify" in query_lower or "set" in query_lower:
