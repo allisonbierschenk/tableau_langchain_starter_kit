@@ -18,4 +18,6 @@ asyncio-mqtt>=0.13.0
 
 # Optional: for enhanced JSON handling
 orjson>=3.9.0
-\
+
+# Session management
+itsdangerous>=2.1.0

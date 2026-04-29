@@ -1,41 +1,70 @@
 """
-Simple MCP + LangChain web application for Tableau
-Using HTTP MCP client like the e-bikes demo
+Admin Web Application for Tableau Cloud User and Group Management
+Using HTTP MCP client for admin operations
 """
 
 import os
 import json
 import asyncio
-from typing import List, Dict, Any
+from contextlib import AsyncExitStack
+from typing import List, Dict, Any, Optional
 
 # Web UI Libraries
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 # Load Environment
 from dotenv import load_dotenv
 load_dotenv()
 
-# Import our HTTP MCP integration
-from utilities.langchain_mcp import tableau_mcp_chat
+# Import our Admin MCP integration
+from utilities.admin_agent import admin_mcp_chat
+from utilities.slack_mrkdwn import llm_markdown_to_slack_mrkdwn
 
 # Request/Response models
 class ChatRequest(BaseModel):
-    message: str
-    history: List[Dict] = []
+    """Accepts web UI (`message` + `history`) and Slack-style bodies (`text` + `messages`)."""
+
+    message: Optional[str] = None
+    text: Optional[str] = None
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+    messages: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def _require_user_text(self):
+        if not (self.message or self.text or "").strip():
+            raise ValueError("Provide 'message' or 'text' with the user's prompt.")
+        return self
+
+    def user_message(self) -> str:
+        return (self.message or self.text or "").strip()
+
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        if self.history:
+            return self.history
+        if self.messages:
+            return self.messages
+        return []
 
 class ChatResponse(BaseModel):
     response: str
     tool_results: List[Dict] = []
     iterations: int = 0
 
+
+class OrchestrationRunRequest(BaseModel):
+    """Plan-then-execute: LLM emits ExecutionPlan, engine runs MCP steps (optional Slack translation)."""
+
+    user_goal: str = Field(..., min_length=1)
+    constraints: Optional[Dict[str, Any]] = None
+
 # Create FastAPI app
 app = FastAPI(
-    title="Tableau MCP Chat",
-    description="Simple HTTP MCP integration for Tableau data analysis"
+    title="Tableau Admin Portal",
+    description="Comprehensive admin agent for managing Tableau Cloud users, groups, permissions, jobs, and operations via tableau-mcp server"
 )
 
 # Add CORS middleware
@@ -46,6 +75,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _validate_slack_bearer_token(authorization: Optional[str]) -> None:
+    """Validate bearer token for Slack bot API access."""
+    expected_token = os.getenv("ADMIN_API_BEARER_TOKEN", "")
+    if not expected_token:
+        raise HTTPException(
+            status_code=500,
+            detail="ADMIN_API_BEARER_TOKEN is not configured on the API service.",
+        )
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
+
+    provided_token = authorization.split(" ", 1)[1].strip()
+    if provided_token != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid bearer token.")
 
 # Serve static files - use absolute path for Railway
 import pathlib
@@ -58,88 +104,201 @@ async def read_root():
     index_path = static_dir / "index.html"
     return FileResponse(str(index_path))
 
+
+@app.get("/SEHuddle", response_class=HTMLResponse)
+@app.get("/sehuddle", response_class=HTMLResponse)
+async def se_huddle_one_pager():
+    """One-pager for Solutions Engineers (presentation / customer framing)."""
+    path = static_dir / "se_huddle.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="SE Huddle page not found.")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint (includes flags the web UI uses for Slack vs Tableau-only layout)."""
+    slack_mcp = bool((os.getenv("SLACK_MCP_SERVER") or "").strip())
     return {
         "status": "healthy",
-        "service": "tableau-mcp-chat",
-        "version": "1.0.0"
+        "service": "tableau-admin-portal",
+        "version": "2.0.0",
+        "slack_mcp_configured": slack_mcp,
+        "capabilities": [
+            "user-management",
+            "group-management",
+            "permissions-management",
+            "job-management",
+            "operations-management",
+            "lineage-queries",
+            "stale-content-reports",
+            "workbook-archiving",
+            "dual-mcp-orchestration",
+        ]
     }
 
 @app.get("/system-prompt")
 async def get_system_prompt():
-    """Get system prompt for display in UI - matches e-bikes demo pattern"""
-    from utilities.langchain_mcp import TABLEAU_SYSTEM_PROMPT
+    """Get admin system prompt for display in UI."""
+    from utilities.admin_agent import ADMIN_SYSTEM_PROMPT
     return {
-        "systemPrompt": TABLEAU_SYSTEM_PROMPT
+        "systemPrompt": ADMIN_SYSTEM_PROMPT
     }
 
 @app.post("/mcp-chat")
-async def mcp_chat_endpoint(request: ChatRequest) -> ChatResponse:
-    """MCP chat endpoint (non-streaming) - matches e-bikes demo pattern"""
+async def mcp_chat_endpoint(
+    request: ChatRequest,
+) -> ChatResponse:
+    """Admin chat endpoint (non-streaming)."""
     try:
-        print(f"💬 MCP Chat request: {request.message}")
-        
-        # Process with MCP
-        result = await tableau_mcp_chat(
-            query=request.message,
-            conversation_history=request.history
+        print(f"🔐 Admin Chat request: {request.user_message()}")
+
+        # Process with Admin MCP Agent
+        result = await admin_mcp_chat(
+            query=request.user_message(),
+            conversation_history=request.conversation_history(),
         )
-        
+
         return ChatResponse(
             response=result["response"],
             tool_results=result["tool_results"],
             iterations=result["iterations"]
         )
-        
+
     except Exception as e:
-        print(f"❌ MCP Chat error: {str(e)}")
+        print(f"❌ Admin Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/slack-mcp-chat")
+async def slack_mcp_chat_endpoint(
+    request: ChatRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> ChatResponse:
+    """Slack bot endpoint using bearer token auth (no web session required)."""
+    _validate_slack_bearer_token(authorization)
+
+    try:
+        result = await admin_mcp_chat(
+            query=request.user_message(),
+            conversation_history=request.conversation_history(),
+        )
+
+        return ChatResponse(
+            response=llm_markdown_to_slack_mrkdwn(result["response"]),
+            tool_results=result["tool_results"],
+            iterations=result["iterations"],
+        )
+    except Exception as e:
+        print(f"❌ Slack Admin Chat error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/orchestration/plan-execute")
+async def orchestration_plan_execute(request: OrchestrationRunRequest) -> Dict[str, Any]:
+    """
+    MCP-only plan-then-execute: TaskPlanner (LLM) + BindingResolver + MCPRouter.
+    Uses ADMIN_MCP_SERVER and optional SLACK_MCP_SERVER from the environment.
+    """
+    from utilities.admin_agent import (
+        AdminMCPHttpClient,
+        MCP_JWT_SUB_CLAIM_HEADER,
+        TABLEAU_USER,
+        ADMIN_MCP_SERVER,
+    )
+    from utilities.mcp_jsonrpc_client import MCPJsonRpcSseClient
+    from utilities.identity_mapping import SlackMCPIdentityMapper, slack_mcp_extra_headers_from_env
+    from orchestration.mcp_router import MCPRouter
+    from orchestration.catalog import ToolCatalogBuilder
+    from orchestration.engine import OrchestrationEngine
+    from orchestration.translation import McpTranslationLayer
+    from orchestration.types import PlannerContext
+
+    slack_url = (os.getenv("SLACK_MCP_SERVER") or "").strip()
+    try:
+        async with AsyncExitStack() as stack:
+            tableau_username = TABLEAU_USER if MCP_JWT_SUB_CLAIM_HEADER else None
+            admin_client = await stack.enter_async_context(
+                AdminMCPHttpClient(ADMIN_MCP_SERVER, tableau_username=tableau_username)
+            )
+            slack_client = None
+            if slack_url:
+                slack_client = await stack.enter_async_context(
+                    MCPJsonRpcSseClient(
+                        slack_url,
+                        extra_headers=slack_mcp_extra_headers_from_env() or None,
+                    )
+                )
+            router = MCPRouter.with_tableau_and_optional_slack(admin_client, slack_client)
+            catalog = await ToolCatalogBuilder.load(router)
+            translation = None
+            if slack_client:
+                translation = McpTranslationLayer(SlackMCPIdentityMapper.from_env_defaults(slack_client))
+            engine = OrchestrationEngine(router, translation=translation)
+            ctx = PlannerContext(
+                user_goal=request.user_goal.strip(),
+                constraints=request.constraints,
+            )
+            return await engine.plan_then_execute(ctx, catalog)
+    except Exception as e:
+        print(f"❌ Orchestration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/mcp-chat-stream")
-async def mcp_chat_stream_endpoint(request: ChatRequest):
-    """MCP chat streaming endpoint with user-friendly progress"""
-    
+async def mcp_chat_stream_endpoint(
+    request: ChatRequest,
+):
+    """Admin chat streaming endpoint with progress updates."""
+
     async def generate_stream():
         try:
             # Send initial progress
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Connection established\", \"step\": \"init\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Admin agent initialized\", \"step\": \"init\"}}\n\n"
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Starting analysis...\", \"step\": \"analysis-start\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Connecting to admin MCP server...\", \"step\": \"connect\"}}\n\n"
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Connecting to Tableau MCP server...\", \"step\": \"mcp-connect\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Loading admin tools (users, groups, permissions, jobs, operations)...\", \"step\": \"load-tools\"}}\n\n"
+
+            if (os.getenv("SLACK_MCP_SERVER") or "").strip():
+                yield f"event: progress\n"
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "message": "Slack MCP is configured — Slack tools use the slack_mcp__ name prefix when invoked.",
+                            "step": "slack-tools",
+                        }
+                    )
+                    + "\n\n"
+                )
+
             yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Discovering available data analysis tools...\", \"step\": \"discover-tools\"}}\n\n"
-            
-            yield f"event: progress\n"
-            yield f"data: {{\"message\": \"Analyzing your question and planning data exploration...\", \"step\": \"planning\"}}\n\n"
-            
-            # Process with MCP
-            result = await tableau_mcp_chat(
-                query=request.message,
-                conversation_history=request.history
+            yield f"data: {{\"message\": \"Processing admin request...\", \"step\": \"processing\"}}\n\n"
+
+            # Process with Admin MCP Agent
+            result = await admin_mcp_chat(
+                query=request.user_message(),
+                conversation_history=request.conversation_history(),
             )
-            
+
             # Send final result
             yield f"event: result\n"
             yield f"data: {json.dumps(result)}\n\n"
-            
+
             yield f"event: done\n"
-            yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
-            
+            yield f"data: {{\"message\": \"Admin operation complete\"}}\n\n"
+
         except Exception as e:
             error_msg = str(e)
-            print(f"❌ Stream error: {error_msg}")
-            
-            # Send error as a result so the UI can display it properly
+            print(f"❌ Admin stream error: {error_msg}")
+
+            # Send error as a result
             yield f"event: result\n"
-            yield f"data: {json.dumps({'response': f'Error: {error_msg}', 'tool_results': [], 'iterations': 0, 'error': True})}\n\n"
-            
+            yield f"data: {json.dumps({'response': f'Admin operation failed: {error_msg}', 'tool_results': [], 'iterations': 0, 'error': True})}\n\n"
+
             yield f"event: done\n"
             yield f"data: {{\"message\": \"Stream complete\"}}\n\n"
     
@@ -155,14 +314,15 @@ async def mcp_chat_stream_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    print("🚀 Starting Tableau MCP Chat Server")
-    print("📊 Using HTTP MCP client for hosted server")
-    
+
+    print("🔐 Starting Tableau Admin Portal")
+    print("📊 Admin operations: Users, Groups, Permissions, Jobs, Operations")
+    print("🔧 MCP Server: " + os.getenv("ADMIN_MCP_SERVER", "Not configured"))
+
     port = int(os.getenv("PORT", 8000))
     # Disable reload in production (Railway sets RAILWAY_ENVIRONMENT)
     reload = os.getenv("RAILWAY_ENVIRONMENT") is None
-    
+
     uvicorn.run(
         "web_app:app",
         host="0.0.0.0",

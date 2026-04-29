@@ -7,11 +7,11 @@
 }
 
 body {
-    font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    /* background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); */
-    background: white;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica', 'Arial', sans-serif;
+    background: #ffffff;
     height: 100vh;
     overflow: hidden;
+    color: #0f172a;
 }
 
 /* Chat Container States */
@@ -28,39 +28,139 @@ body {
 /* Main Container */
 .container {
     background: white;
-    border-radius: 20px;
+    border-radius: 12px;
     width: 100%;
     height: 100%;
-    max-width: 800px;
+    max-width: 900px;
     max-height: 90vh;
     margin: 5vh auto;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     position: relative;
-    border: 1px solid #e9ecef;
+    border: 1px solid #e0f2fe;
 }
 
 /* Header */
 header {
-    background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+    background: #0f172a;
     color: white;
-    padding: 20px;
+    padding: 20px 24px;
     text-align: center;
     position: relative;
 }
 
 header h1 {
-    font-size: 28px;
-    font-weight: 700;
-    margin-bottom: 5px;
+    font-size: 24px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
 }
 
-.subtitle {
-    font-size: 16px;
+header p {
+    margin: 0;
     opacity: 0.9;
-    margin-top: 5px;
+    font-size: 14px;
+}
+
+.header-tagline {
+    font-size: 13px;
+    opacity: 0.92;
+    line-height: 1.45;
+}
+
+.header-sep {
+    opacity: 0.5;
+    padding: 0 0.2em;
+}
+
+.header-user {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 0.85;
+}
+
+/* Tableau + Slack integration strip (under header title) */
+.integration-bar {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.integration-bar .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.badge-tableau {
+    background: rgba(6, 182, 212, 0.25);
+    color: #ecfeff;
+    border: 1px solid rgba(34, 211, 238, 0.45);
+}
+
+.badge-slack {
+    background: rgba(74, 21, 75, 0.55);
+    color: #f4f0f7;
+    border: 1px solid rgba(236, 178, 255, 0.45);
+}
+
+.integration-note {
+    flex: 1 1 180px;
+    color: #cbd5e1;
+    font-weight: 400;
+}
+
+.integration-note code {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #e2e8f0;
+    font-size: 11px;
+}
+
+.integration-note-muted {
+    opacity: 0.88;
+}
+
+.slack-example {
+    color: #6b21a8;
+    font-weight: 600;
+}
+
+.ready-banner {
+    background: #f0f9ff;
+    border-left: 4px solid #0891b2;
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #0f172a;
+}
+
+.ready-banner kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    margin: 0 1px;
+    font-size: 11px;
+    font-family: ui-monospace, Menlo, Monaco, monospace;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-shadow: 0 1px 0 #e2e8f0;
 }
 
 /* Chat Box */
@@ -68,7 +168,7 @@ header h1 {
     flex: 1;
     padding: 20px;
     overflow-y: auto;
-    background: white;
+    background: #ffffff;
     scroll-behavior: smooth;
 }
 
@@ -77,16 +177,16 @@ header h1 {
 }
 
 .chat-box::-webkit-scrollbar-track {
-    background: #f1f1f1;
+    background: #f8fafc;
 }
 
 .chat-box::-webkit-scrollbar-thumb {
-    background: #adb5bd;
+    background: #cbd5e1;
     border-radius: 3px;
 }
 
 .chat-box::-webkit-scrollbar-thumb:hover {
-    background: #6c757d;
+    background: #94a3b8;
 }
 
 /* Messages */
@@ -112,19 +212,18 @@ header h1 {
 }
 
 .message.user {
-    background: #f8f9fa;
-    color: #495057;
+    background: #0891b2;
+    color: white;
     margin-left: auto;
-    border-bottom-right-radius: 6px;
-    border: 1px solid #dee2e6;
+    border-bottom-right-radius: 4px;
+    border: none;
 }
 
 .message.bot {
-    background: #f8f9fa;
-    color: #495057;
-    border: 1px solid #dee2e6;
-    border-bottom-left-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    background: #ffffff;
+    color: #0f172a;
+    border: 1px solid #e0f2fe;
+    border-bottom-left-radius: 4px;
 }
 
 /* Enhanced Data Tables */
@@ -143,22 +242,22 @@ header h1 {
 }
 
 .data-table th {
-    background: #6c757d;
-    color: white;
+    background: #f0f9ff;
+    color: #0f172a;
     padding: 12px 8px;
     text-align: left;
     font-weight: 600;
-    border-bottom: 2px solid #5a6268;
+    border-bottom: 2px solid #bae6fd;
 }
 
 .data-table td {
     padding: 10px 8px;
-    border-bottom: 1px solid #dee2e6;
-    color: #495057;
+    border-bottom: 1px solid #e0f2fe;
+    color: #0f172a;
 }
 
 .data-table tr:hover {
-    background: #f8f9fa;
+    background: #f0f9ff;
 }
 
 .data-table tr:last-child td {
@@ -171,10 +270,10 @@ header h1 {
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    background: #e3f2fd;
-    border: 1px solid #bbdefb;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
     border-radius: 12px;
-    color: #1565c0;
+    color: #0e7490;
     font-size: 13px;
     margin: 5px 0;
     animation: pulse 2s infinite;
@@ -185,41 +284,86 @@ header h1 {
     50% { opacity: 0.7; }
 }
 
+/* Admin stream progress (Tableau vs Slack-aware) */
+.admin-progress {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
+    border-radius: 12px;
+    color: #0e7490;
+    font-size: 13px;
+    margin: 5px 0;
+    line-height: 1.45;
+}
+
+.admin-progress em {
+    font-style: normal;
+    font-weight: 500;
+}
+
+.admin-progress-slack {
+    background: #faf5ff;
+    border-color: #d8b4fe;
+    color: #581c87;
+}
+
+.progress-icon-tableau,
+.progress-icon-slack {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-top: 3px;
+}
+
+.progress-icon-tableau {
+    background: #06b6d4;
+    box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.25);
+}
+
+.progress-icon-slack {
+    background: #611f69;
+    box-shadow: 0 0 0 2px rgba(97, 31, 105, 0.2);
+}
+
 /* Insight Boxes */
 .insight-box {
-    background: #d4edda;
-    border: 1px solid #c3e6cb;
+    background: #ecfdf5;
+    border: 1px solid #6ee7b7;
     border-radius: 8px;
     padding: 10px 12px;
     margin: 8px 0;
-    color: #155724;
+    color: #065f46;
 }
 
 .alert-box {
-    background: #f8d7da;
-    border: 1px solid #f5c6cb;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
     border-radius: 8px;
     padding: 10px 12px;
     margin: 8px 0;
-    color: #721c24;
+    color: #991b1b;
 }
 
 .trend-box {
-    background: #d1ecf1;
-    border: 1px solid #bee5eb;
+    background: #f0f9ff;
+    border: 1px solid #7dd3fc;
     border-radius: 8px;
     padding: 10px 12px;
     margin: 8px 0;
-    color: #0c5460;
+    color: #075985;
 }
 
 .action-box {
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
+    background: #fef3c7;
+    border: 1px solid #fde047;
     border-radius: 8px;
     padding: 10px 12px;
     margin: 8px 0;
-    color: #856404;
+    color: #92400e;
 }
 
 /* Typing Indicator */
@@ -228,12 +372,11 @@ header h1 {
     align-items: center;
     gap: 12px;
     padding: 12px 16px;
-    background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
-    border: 2px solid #90caf9;
+    background: #f0f9ff;
+    border: 1px solid #7dd3fc;
     border-radius: 18px;
-    color: #1565c0;
+    color: #0c4a6e;
     font-style: italic;
-    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
     animation: thinkingPulse 2s ease-in-out infinite;
     margin: 8px 0;
 }
@@ -252,10 +395,9 @@ header h1 {
 .typing-dots span {
     width: 8px;
     height: 8px;
-    background: #2196f3;
+    background: #06b6d4;
     border-radius: 50%;
     animation: typingDot 1.4s infinite ease-in-out;
-    box-shadow: 0 2px 4px rgba(33, 150, 243, 0.3);
 }
 
 .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
@@ -274,63 +416,70 @@ header h1 {
 
 @keyframes thinkingPulse {
     0%, 100% {
-        box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
         transform: translateY(0);
     }
     50% {
-        box-shadow: 0 4px 12px rgba(33, 150, 243, 0.25);
         transform: translateY(-2px);
     }
 }
 
 /* Input Area */
 .input-area {
-    padding: 20px;
+    padding: 16px 20px;
     background: white;
-    border-top: 1px solid #dee2e6;
+    border-top: 1px solid #e0f2fe;
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: flex-end;
 }
 
-.input-area input[type="text"] {
+.input-area input[type="text"],
+.input-area textarea {
     flex: 1;
-    padding: 12px 16px;
-    border: 2px solid #dee2e6;
-    border-radius: 25px;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
     font-size: 14px;
     font-family: inherit;
     outline: none;
-    transition: all 0.3s ease;
-    resize: none;
-    min-height: 20px;
-    max-height: 100px;
+    transition: all 0.2s ease;
+    resize: vertical;
+    min-height: 44px;
+    max-height: 200px;
+    line-height: 1.45;
     background: white;
-    color: #495057;
+    color: #0f172a;
 }
 
-.input-area input[type="text"]:focus {
-    border-color: #6c757d;
-    box-shadow: 0 0 0 3px rgba(108, 117, 125, 0.1);
+.input-area textarea {
+    field-sizing: content;
+    min-height: 52px;
 }
 
-.input-area input[type="text"]:disabled {
-    background: #f8f9fa;
-    color: #adb5bd;
+.input-area input[type="text"]:focus,
+.input-area textarea:focus {
+    border-color: #06b6d4;
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+}
+
+.input-area input[type="text"]:disabled,
+.input-area textarea:disabled {
+    background: #f8fafc;
+    color: #64748b;
     cursor: not-allowed;
 }
 
 .input-area button {
-    background: #6c757d;
+    background: #0891b2;
     color: white;
     border: none;
-    padding: 12px 20px;
-    border-radius: 25px;
+    padding: 10px 20px;
+    border-radius: 8px;
     cursor: pointer;
     font-size: 14px;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    min-width: 70px;
+    font-weight: 500;
+    transition: background-color 0.2s ease;
+    min-width: 80px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -338,16 +487,13 @@ header h1 {
 }
 
 .input-area button:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
-    background: #5a6268;
+    background: #0e7490;
 }
 
 .input-area button:disabled {
-    background: #adb5bd;
+    background: #a5f3fc;
+    color: #0891b2;
     cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
 }
 
 /* Spinner Animation */
@@ -367,38 +513,38 @@ header h1 {
 
 /* Code Blocks */
 code {
-    background: #f8f9fa;
+    background: #f0f9ff;
     padding: 2px 6px;
     border-radius: 4px;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 12px;
-    color: #495057;
-    border: 1px solid #dee2e6;
+    color: #0c4a6e;
+    border: 1px solid #bae6fd;
 }
 
 /* Links */
 a {
-    color: #6c757d;
+    color: #0891b2;
     text-decoration: none;
 }
 
 a:hover {
     text-decoration: underline;
-    color: #495057;
+    color: #0e7490;
 }
 
 /* Enhanced Error States */
 .message.bot.error {
-    border-color: #dc3545;
-    background: #f8d7da;
-    color: #721c24;
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #991b1b;
 }
 
 /* Success States */
 .message.bot.success {
-    border-color: #28a745;
-    background: #d4edda;
-    color: #155724;
+    border-color: #6ee7b7;
+    background: #ecfdf5;
+    color: #065f46;
 }
 
 /* Enhanced Responsive Design */
@@ -410,37 +556,38 @@ a:hover {
         max-height: none;
         border-radius: 0;
         margin: 0;
+        box-shadow: none;
     }
-    
+
     header {
-        padding: 15px;
+        padding: 16px;
     }
-    
+
     header h1 {
-        font-size: 24px;
+        font-size: 20px;
     }
-    
-    .subtitle {
-        font-size: 14px;
+
+    header p {
+        font-size: 13px;
     }
-    
+
     .chat-box {
-        padding: 15px;
+        padding: 16px;
     }
-    
+
     .message {
         max-width: 90%;
         font-size: 14px;
     }
-    
+
     .input-area {
-        padding: 15px;
+        padding: 12px 16px;
     }
-    
+
     .data-table {
         font-size: 12px;
     }
-    
+
     .data-table th,
     .data-table td {
         padding: 8px 6px;
@@ -449,7 +596,7 @@ a:hover {
 
 /* Enhanced Loading States */
 .loading-skeleton {
-    background: linear-gradient(90deg, #f8f9fa 25%, #e9ecef 50%, #f8f9fa 75%);
+    background: linear-gradient(90deg, #f0f9ff 25%, #e0f2fe 50%, #f0f9ff 75%);
     background-size: 200% 100%;
     animation: loading 1.5s infinite;
 }
@@ -479,26 +626,26 @@ a:hover {
 /* Focus States for Better Accessibility */
 button:focus,
 input:focus {
-    outline: 2px solid #6c757d;
+    outline: 2px solid #06b6d4;
     outline-offset: 2px;
 }
 
 /* High Contrast Mode Support */
 @media (prefers-contrast: high) {
     .message.user {
-        background: #495057;
+        background: #0891b2;
         color: #fff;
         border: 2px solid #fff;
     }
-    
+
     .message.bot {
         background: #fff;
         color: #000;
         border: 2px solid #000;
     }
-    
+
     .input-area button {
-        background: #495057;
+        background: #0891b2;
         color: #fff;
         border: 2px solid #fff;
     }
@@ -533,8 +680,8 @@ input:focus {
 }
 
 .image-container {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border: 2px dashed #6c757d;
+    background: #f0f9ff;
+    border: 2px dashed #7dd3fc;
     border-radius: 12px;
     padding: 30px;
     text-align: center;
@@ -549,7 +696,7 @@ input:focus {
     left: -50%;
     width: 200%;
     height: 200%;
-    background: linear-gradient(45deg, transparent 30%, rgba(108, 117, 125, 0.1) 50%, transparent 70%);
+    background: linear-gradient(45deg, transparent 30%, rgba(6, 182, 212, 0.05) 50%, transparent 70%);
     animation: shimmer 3s infinite;
 }
 
@@ -579,13 +726,13 @@ input:focus {
 .image-text {
     font-size: 18px;
     font-weight: 600;
-    color: #495057;
+    color: #0c4a6e;
     margin-bottom: 8px;
 }
 
 .image-note {
     font-size: 14px;
-    color: #6c757d;
+    color: #0e7490;
     opacity: 0.8;
     line-height: 1.4;
 }
@@ -617,12 +764,189 @@ input:focus {
 
 /* Datasource Info Styling */
 .datasource-info {
-    background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
-    border: 1px solid #4caf50;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
     border-radius: 8px;
     padding: 12px 16px;
     margin: 16px 0;
-    color: #2e7d32;
+    color: #0e7490;
     font-size: 14px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Login Container */
+.login-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: #ffffff;
+    padding: 20px;
+}
+
+.login-box {
+    background: white;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+    border: 1px solid #e0f2fe;
+}
+
+.login-header {
+    padding: 40px 32px 32px;
+    text-align: center;
+    border-bottom: 1px solid #e0f2fe;
+}
+
+.login-header h1 {
+    font-size: 24px;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0 0 8px 0;
+}
+
+.login-header p {
+    font-size: 14px;
+    color: #475569;
+    margin: 0;
+}
+
+.login-form {
+    padding: 32px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    color: #0f172a;
+    font-weight: 500;
+    margin-bottom: 6px;
+    font-size: 14px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: all 0.2s ease;
+    background: white;
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="password"]:focus {
+    border-color: #06b6d4;
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+}
+
+.login-button {
+    width: 100%;
+    background: #0891b2;
+    color: white;
+    border: none;
+    padding: 11px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.2s ease;
+    margin-top: 8px;
+}
+
+.login-button:hover {
+    background: #0e7490;
+}
+
+.login-button:active {
+    background: #155e75;
+}
+
+.login-button:disabled {
+    background: #a5f3fc;
+    color: #0891b2;
+    cursor: not-allowed;
+}
+
+.login-error {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+    color: #991b1b;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.login-info {
+    margin-top: 24px;
+    padding: 12px 16px;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #164e63;
+}
+
+.login-info strong {
+    display: block;
+    color: #0f172a;
+    margin-bottom: 4px;
+}
+
+.login-info p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.logout-button {
+    position: absolute;
+    top: 16px;
+    right: 24px;
+    background: transparent;
+    color: white;
+    border: 1px solid rgba(6, 182, 212, 0.5);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.logout-button:hover {
+    background: rgba(6, 182, 212, 0.2);
+    border-color: #06b6d4;
+}
+
+@media (max-width: 768px) {
+    .login-box {
+        max-width: 100%;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .login-container {
+        padding: 0;
+        background: white;
+    }
+
+    .logout-button {
+        position: static;
+        display: block;
+        margin: 12px auto 0;
+        width: fit-content;
+    }
+
+    .container {
+        border-radius: 0;
+        box-shadow: none;
+    }
 }

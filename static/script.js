@@ -1,13 +1,140 @@
 // script.js - STANDALONE VERSION WITHOUT TABLEAU EXTENSIONS API
 
 // Configuration - Set your deployed backend URL here
-const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-    ? 'http://localhost:8000' 
+const API_BASE_URL = window.API_BASE_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:8000'
     : 'https://mcpagent.up.railway.app');
 
 let currentStream = null;
 let conversationHistory = []; // Track conversation for MCP context
 let sessionId = null; // Track session ID for better client-server communication
+let currentUser = null; // Track authenticated user
+
+// --- Authentication Functions ---
+
+// Check authentication status on page load
+async function checkAuthStatus() {
+    // Authentication disabled - go straight to chat interface
+    console.log('Authentication bypassed - showing chat interface');
+    showChatInterface();
+}
+
+// Show login interface
+function showLoginInterface() {
+    document.getElementById('loginContainer').style.display = 'flex';
+    document.getElementById('chatContainer').style.display = 'none';
+}
+
+// Show chat interface
+function showChatInterface() {
+    document.getElementById('loginContainer').style.display = 'none';
+    document.getElementById('chatContainer').style.display = 'block';
+}
+
+// Update user info display
+function updateUserInfo(user) {
+    const userInfoEl = document.getElementById('userInfo');
+    if (userInfoEl && user) {
+        userInfoEl.textContent = `${user.user_name} (${user.site_role})`;
+    }
+}
+
+// Handle login
+async function handleLogin() {
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const loginBtn = document.getElementById('loginBtn');
+    const errorDiv = document.getElementById('loginError');
+
+    if (!username || !password) {
+        errorDiv.textContent = 'Please enter both email and password';
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    // Update UI
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Signing in...';
+    errorDiv.style.display = 'none';
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/login`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+                username: username,
+                password: password,
+                use_pat: false
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success && data.is_admin) {
+            currentUser = data;
+            showChatInterface();
+            updateUserInfo(data);
+        } else {
+            errorDiv.textContent = data.message || 'Authentication failed';
+            errorDiv.style.display = 'block';
+        }
+    } catch (error) {
+        errorDiv.textContent = `Connection error: ${error.message}`;
+        errorDiv.style.display = 'block';
+    } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Sign In';
+    }
+}
+
+// Handle logout
+async function handleLogout() {
+    try {
+        await fetch(`${API_BASE_URL}/logout`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
+
+    currentUser = null;
+    conversationHistory = [];
+    showLoginInterface();
+
+    // Clear form
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+}
+
+// Initialize auth on page load
+document.addEventListener('DOMContentLoaded', () => {
+    checkAuthStatus();
+
+    // Login form handlers
+    const loginBtn = document.getElementById('loginBtn');
+    const loginPassword = document.getElementById('loginPassword');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    if (loginBtn) {
+        loginBtn.addEventListener('click', handleLogin);
+    }
+
+    if (loginPassword) {
+        loginPassword.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleLogin();
+            }
+        });
+    }
+
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', handleLogout);
+    }
+});
 
 // Generate a session ID for this client
 function generateSessionId() {
@@ -85,7 +212,7 @@ async function sendMessage() {
     const sendBtn = document.getElementById('sendBtn');
     input.disabled = true;
     sendBtn.disabled = true;
-    sendBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
+    sendBtn.innerHTML = '<span class="spinner"></span> Processing...';
 
     const botMessageId = 'bot-response-' + Date.now();
     let fullResponse = '';
@@ -96,10 +223,9 @@ async function sendMessage() {
         const controller = new AbortController();
         currentStream = controller;
 
-        // Always use MCP/Analyst Agent endpoint
-        console.log(`Using MCP/Analyst Agent for: "${message}"`);
+        // Always use Admin Agent endpoint
+        console.log(`Using Admin Agent for: "${message}"`);
 
-        // Don't show thinking bubble immediately - wait for "planning" step
         console.log('Calling handleMCPRequest');
         fullResponse = await handleMCPRequest(message, controller, botMessageId);
         console.log('handleMCPRequest completed, response:', fullResponse);
@@ -149,12 +275,12 @@ async function handleMCPRequest(message, controller, botMessageId) {
     try {
         const response = await fetch(`${API_BASE_URL}/mcp-chat-stream`, {
             method: 'POST',
-            headers: { 
+            headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
                 'X-Session-ID': generateSessionId()
             },
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, history: conversationHistory }),
             signal: controller.signal
         });
 
@@ -193,10 +319,9 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
     let isComplete = false;
     let timeoutId = null;
 
-    // Keep thinking indicator visible - it will stay until we get actual results
-    // Create progress indicator for MCP (shows detailed progress alongside thinking bubble)
-    const progressId = 'mcp-progress-' + Date.now();
-    progressDiv = addMessage('<div class="mcp-progress"><em>Initializing advanced analysis...</em></div>', 'bot', progressId);
+    // Create progress indicator for admin operations
+    const progressId = 'admin-progress-' + Date.now();
+    progressDiv = addMessage('<div class="admin-progress"><em>Initializing...</em></div>', 'bot', progressId);
     
     // Create bot message div but hide it until we have content
     let botMessageDiv = addMessage('', 'bot', botMessageId);
@@ -289,8 +414,7 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             console.log('Result event, fullResponse:', fullResponse);
                             console.log('Tool results for datasource extraction:', window.lastToolResults);
                             if (fullResponse) {
-                                // Enhanced formatting for MCP results with datasource info
-                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse, window.lastToolResults);
+                                botMessageDiv.innerHTML = formatMCPResponse(fullResponse);
                                 // Show the message div now that we have content
                                 botMessageDiv.style.display = '';
                             }
@@ -299,12 +423,6 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
                             if (progressDiv) {
                                 progressDiv.remove();
                                 progressDiv = null;
-                            }
-                            
-                            // Auto-display dashboard image if user requested it
-                            if (originalMessage && shouldDisplayDashboardImage(originalMessage)) {
-                                console.log('Auto-displaying dashboard image based on user request');
-                                setTimeout(() => displayDashboardImage(), 500);
                             }
                             // Mark as complete but continue to wait for done event
                             isComplete = true;
@@ -350,45 +468,17 @@ async function handleMCPStreamingResponse(response, botMessageId, originalMessag
     }
 }
 
-// --- Handle MCP Progress Events ---
+// --- Handle Admin Progress Events ---
 function handleMCPProgressEvent(eventData, progressDiv) {
     if (eventData.message) {
-        let userFriendlyMessage = eventData.message;
-        
-        // Convert technical messages to user-friendly ones
-        if (eventData.step === 'discover-tools') {
-            userFriendlyMessage = "Discovering available data analysis tools...";
-        } else if (eventData.step === 'tools-discovered') {
-            userFriendlyMessage = `Found ${eventData.tools ? eventData.tools.length : 0} analysis tools ready to use`;
-        } else if (eventData.step === 'iteration') {
-            userFriendlyMessage = `Thinking through your question (Step ${eventData.iteration || 1})...`;
-        } else if (eventData.step === 'executing-tools') {
-            userFriendlyMessage = `Analyzing your data (${eventData.tool_count || 1} analysis step${eventData.tool_count > 1 ? 's' : ''})...`;
-        } else if (eventData.step === 'tool-executing') {
-            if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "Exploring available data sources...";
-            } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "Examining data structure and available fields...";
-            } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "Querying data to find insights...";
-            } else {
-                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}...`;
-            }
-        } else if (eventData.step === 'tool-completed') {
-            if (eventData.tool === 'list-datasources') {
-                userFriendlyMessage = "Data sources identified";
-            } else if (eventData.tool === 'list-fields') {
-                userFriendlyMessage = "Data structure analyzed";
-            } else if (eventData.tool === 'query-datasource') {
-                userFriendlyMessage = "Data query completed";
-            } else {
-                userFriendlyMessage = `${eventData.tool.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} completed`;
-            }
-        } else if (eventData.step === 'final-response') {
-            userFriendlyMessage = "Preparing your personalized insights...";
-        }
-        
-        progressDiv.innerHTML = `<div class="mcp-progress" data-step="${eventData.step || 'default'}"><em>${userFriendlyMessage}</em></div>`;
+        const raw = eventData.message || 'Processing...';
+        const msg = escapeHtml(raw);
+        const slackish = /slack/i.test(raw);
+        const cls = slackish ? 'admin-progress admin-progress-slack' : 'admin-progress';
+        const dot = slackish
+            ? '<span class="progress-icon-slack" aria-hidden="true"></span>'
+            : '<span class="progress-icon-tableau" aria-hidden="true"></span>';
+        progressDiv.innerHTML = `<div class="${cls}">${dot}<em>${msg}</em></div>`;
     }
 }
 
@@ -397,31 +487,21 @@ function getMCPProgressIcon(step) {
     return '';
 }
 
-// --- Enhanced Response Formatting for MCP Results ---
-function formatMCPResponse(text, toolResults = null) {
+// --- Admin Response Formatting ---
+function formatMCPResponse(text) {
     if (!text) return '';
-    
+
     let formatted = text
         .replace(/\n/g, '<br>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // **bold**
-        .replace(/\*(.*?)\*/g, '<em>$1</em>') // *italic*
-        .replace(/`(.*?)`/g, '<code>$1</code>') // `code`
-        .replace(/#{1,6}\s+(.*?)(?=\n|$)/g, '<strong>$1</strong>'); // # headers
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code>$1</code>');
 
-    // Add datasource information if available
-    if (toolResults && toolResults.length > 0) {
-        const datasources = extractDatasourceNames(toolResults);
-        console.log('Datasources:', datasources);
-        console.log('Tool Results:', toolResults);
-        if (datasources.length > 0) {
-            formatted += '<br><br><div class="datasource-info"><strong>Data Sources Used:</strong> ' + datasources.join(', ') + '</div>';
-        }
-    }
+    // Highlight admin operations
+    formatted = formatted.replace(/✓/g, '<span style="color: #10b981;">✓</span>');
+    formatted = formatted.replace(/✗/g, '<span style="color: #ef4444;">✗</span>');
+    formatted = formatted.replace(/⚠️/g, '<span style="color: #f59e0b;">⚠️</span>');
 
-    // Enhanced formatting for data tables and insights
-    formatted = formatDataTables(formatted);
-    formatted = formatInsightBoxes(formatted);
-    
     return formatted;
 }
 
@@ -545,18 +625,25 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// --- Enhanced Enter Key Handler ---
+// --- Enter / Shift+Enter (Slack-style multiline) ---
 function handleEnter(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         sendMessage();
     } else if (event.key === 'Escape') {
-        // Cancel current stream if running
         if (currentStream) {
             currentStream.abort();
             currentStream = null;
         }
     }
+}
+
+function autoResizeMessageInput() {
+    const el = document.getElementById('messageInput');
+    if (!el || el.tagName !== 'TEXTAREA') return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, 200);
+    el.style.height = `${Math.max(52, next)}px`;
 }
 
 // --- Enhanced Keyboard Shortcuts ---
@@ -630,17 +717,35 @@ function displayDashboardImage() {
     }
 }
 
-// --- Enhanced Connection Health Check ---
+// --- Health (includes Slack MCP flag for UI) ---
 async function checkServerHealth() {
     try {
-        const response = await fetch(`${API_BASE_URL}/health`, { 
-            method: 'GET',
-            timeout: 5000 
-        });
-        return response.ok;
+        const response = await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
+        if (!response.ok) {
+            return { ok: false, slack: false };
+        }
+        const data = await response.json();
+        return { ok: true, slack: !!data.slack_mcp_configured, raw: data };
     } catch (error) {
         console.warn('Server health check failed:', error);
-        return false;
+        return { ok: false, slack: false };
+    }
+}
+
+function updateIntegrationBar(health) {
+    const el = document.getElementById('integrationBar');
+    if (!el) return;
+    if (!health.ok) {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="integration-note integration-note-muted">Could not reach API health — check connection.</span>';
+        return;
+    }
+    if (health.slack) {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="badge badge-slack">Slack MCP</span><span class="integration-note">Bridge on: Tableau tools use native names; Slack tools use the <code>slack_mcp__</code> prefix.</span>';
+    } else {
+        el.innerHTML =
+            '<span class="badge badge-tableau">Tableau MCP</span><span class="integration-note integration-note-muted">Slack bridge off (set <code>SLACK_MCP_SERVER</code> on the API to enable).</span>';
     }
 }
 
@@ -649,28 +754,37 @@ document.addEventListener('DOMContentLoaded', async function() {
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    // Debug: Show which API URL is being used
     console.log('Using API URL:', API_BASE_URL);
     console.log('Current hostname:', window.location.hostname);
 
-    // Setup event listeners
-    if (messageInput) messageInput.addEventListener('keypress', handleEnter);
+    if (messageInput) {
+        messageInput.addEventListener('keydown', handleEnter);
+        messageInput.addEventListener('input', autoResizeMessageInput);
+    }
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
-    
+
     setupKeyboardShortcuts();
 
-    // Auto-focus on input
     if (messageInput) {
         setTimeout(() => messageInput.focus(), 100);
+        autoResizeMessageInput();
     }
 
-    // Check server health
-    const serverHealthy = await checkServerHealth();
-    if (!serverHealthy) {
-        addMessage(`<strong>Server Connection Issue</strong><br>Unable to connect to the backend server at ${API_BASE_URL}. Please ensure the Python server is running and accessible.`, "bot");
+    const health = await checkServerHealth();
+    updateIntegrationBar(health);
+    if (!health.ok) {
+        addMessage(
+            `<strong>Server Connection Issue</strong><br>Unable to connect to the backend at ${escapeHtml(API_BASE_URL)}. Start the API server and refresh.`,
+            'bot'
+        );
         return;
     }
 
-    // Show ready message
-    addMessage("<strong>Ready!</strong> You can now ask me about your Tableau data sources and get insights.", "bot");
+    const slackHint = health.slack
+        ? ' Tableau and Slack MCP are both available from this UI.'
+        : ' Slack MCP is not configured on the server; only Tableau admin tools are available here.';
+    addMessage(
+        `<div class="ready-banner"><strong>Ready.</strong>${escapeHtml(slackHint)} Ask in plain language—use <kbd>Enter</kbd> to send and <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.</div>`,
+        'bot'
+    );
 });

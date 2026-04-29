@@ -107,6 +107,7 @@ This will test:
 3. **Enhanced web interface** - Modern, responsive design
 4. **Comprehensive testing** - Full test suite for all functionality
 5. **Better error handling** - Robust error handling and fallback responses
+6. **Admin Agent** - Comprehensive agent for user, group, permissions, job, and operations management
 
 ## Example Responses
 
@@ -160,3 +161,125 @@ ID: c79a393e-ac72-48c1-8338-3d802d7973d9
 
 💡 **Next Steps**: Ask me about specific metrics like "Show me top performers by revenue" or "What are the trends by region?" for more detailed analysis.
 ```
+
+## Admin Agent
+
+The Admin Agent provides comprehensive Tableau Cloud administration capabilities through the tableau-mcp server.
+
+### Capabilities
+
+**User Management:**
+- Add, update, and delete users
+- Query users with filters and sorting
+- Manage site roles and authentication methods
+
+**Group Management:**
+- Create and manage groups
+- Add/remove users from groups
+- Set minimum site roles for groups
+
+**Permissions Management:**
+- List granular permissions on workbooks, datasources, projects, flows, and views
+- Add, update, and delete permissions for users and groups
+- Query default permissions for projects
+- Bulk permission operations
+
+**Job Management:**
+- Query all jobs with filtering (extract refreshes, flow runs, subscriptions)
+- Get detailed job information by ID
+- Cancel running or queued jobs
+- Monitor job status and progress
+
+**Operations Management:**
+- Analyze job overlap and concurrent execution patterns
+- Calculate effective permissions across all content
+- Trace user access paths through groups and permissions
+- Scan for permission overrides on content
+- Generate stale content reports for cleanup
+- Query lineage relationships via Metadata API
+- Archive workbooks to S3 or base64
+
+### Usage Examples
+
+**Add a user:**
+```
+Add user john.doe@company.com with Creator role
+```
+
+**Grant permissions:**
+```
+Give user jane.smith@company.com Read and Write access to workbook "Sales Dashboard"
+```
+
+**Query jobs:**
+```
+Show me all failed extract refresh jobs from today
+```
+
+**Find stale content:**
+```
+Generate a report of workbooks not viewed in the last 90 days
+```
+
+**Analyze permissions:**
+```
+Show me effective permissions for user john.doe@company.com on all workbooks
+```
+
+### Configuration
+
+The Admin Agent connects to the tableau-mcp server via the `ADMIN_MCP_SERVER` environment variable:
+
+```bash
+ADMIN_MCP_SERVER='https://your-mcp-server.example.com/tableau-mcp'
+```
+
+**Per-User Authentication (Optional):**
+
+For direct-trust + JWT pattern with per-request user identity:
+
+```bash
+MCP_JWT_SUB_CLAIM_HEADER='X-Tableau-Jwt-Username'
+TABLEAU_USER='admin.user@company.com'
+```
+
+**Important:** Only use per-user headers with network-protected MCP endpoints (VPN, private link, mTLS).
+
+**Tool Filtering (Optional):**
+
+Restrict available MCP tools for security:
+
+```bash
+INCLUDE_TOOL_GROUPS='admin,operations'
+EXCLUDE_TOOLS='archive-workbook'
+```
+
+### Architecture
+
+The Admin Agent uses the tableau-mcp server as described in the [tableau-mcp integration handoff](https://github.com/tableau/tableau-mcp/blob/main/docs/integrations/slack-http-ui-handoff.md):
+
+- **MCP HTTP Transport**: JSON-RPC over streamable HTTP
+- **Tool Groups**: `admin-users`, `admin-groups`, `content-permissions`, `site-jobs`, `tableau-operations`
+- **Authentication**: OAuth or direct-trust with per-request user headers
+- **Scope-based Authorization**: Connected App JWT scopes for fine-grained access control
+
+### Dual MCP orchestration (Tableau + Slack)
+
+The admin chat path (`admin_mcp_chat` / `/mcp-chat`) loads tools from `ADMIN_MCP_SERVER` using **native Tableau MCP tool names** (same as pre–dual-MCP). When `SLACK_MCP_SERVER` is set, **Slack-only** tools are appended with the `slack_mcp__…` prefix so they route to the Slack MCP server.
+
+**Cursor vs this API**
+
+| Surface | Auth for Slack MCP |
+|--------|---------------------|
+| **Cursor IDE** | Add Slack MCP in MCP settings; OAuth is handled interactively ([Slack + Cursor](https://docs.slack.dev/ai/slack-mcp-server/connect-to-cursor/)). |
+| **This FastAPI service** | You must supply credentials the HTTP client can send on each request, typically `SLACK_MCP_BEARER_TOKEN` (or `SLACK_MCP_AUTH_HEADER` + `SLACK_MCP_AUTH_VALUE`). Hosted `https://mcp.slack.com/mcp` expects a valid bearer from your approved OAuth or gateway flow—there is no interactive “Connect” button in the server process. |
+
+**Identity mapping (Slack MCP only):** `utilities/identity_mapping.py` exposes `SlackMCPIdentityMapper`, which discovers an email lookup tool from Slack `tools/list` (or uses `SLACK_MCP_EMAIL_LOOKUP_TOOL`) and resolves a workbook owner email to a Slack user id. It is wired into `McpTranslationLayer` for `translation_key` `email_to_slack_user_id` in the orchestration binding pipeline.
+
+**Plan-then-execute API:** `POST /orchestration/plan-execute` with body `{"user_goal": "…", "constraints": {}}` runs `LLMTaskPlanner` → `PlanSchemaValidator` → `BindingResolver` → `MCPRouter` (see package `orchestration/`). This is MCP-only planning and execution, separate from the conversational `/mcp-chat` loop.
+
+Environment variables are documented in [.env_template](.env_template) under Slack MCP.
+
+## Slack bot
+
+Optional Socket Mode integration: see [README_SLACK.md](README_SLACK.md).
