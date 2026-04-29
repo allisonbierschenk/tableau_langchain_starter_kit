@@ -106,21 +106,26 @@ def _iter_json_roots_from_tool_result(tr: Dict[str, Any]) -> List[Any]:
         s = r.strip()
         if s.startswith("{") or s.startswith("["):
             try:
-                roots.append(json.loads(s))
-            except json.JSONDecodeError:
-                pass
+                parsed = json.loads(s)
+                roots.append(parsed)
+                print(f"   🔍 Parsed string result as JSON: {type(parsed).__name__}")
+            except json.JSONDecodeError as e:
+                print(f"   ⚠️ JSON decode failed for string result: {e}")
     elif isinstance(r, dict):
         roots.append(r)
-        for block in r.get("content") or []:
+        for i, block in enumerate(r.get("content") or []):
             if isinstance(block, dict) and block.get("type") == "text":
                 t = block.get("text")
                 if isinstance(t, str) and t.strip().startswith(("{", "[")):
                     try:
-                        roots.append(json.loads(t))
-                    except json.JSONDecodeError:
-                        pass
+                        parsed = json.loads(t)
+                        roots.append(parsed)
+                        print(f"   🔍 Parsed content[{i}].text as JSON: {type(parsed).__name__} with {len(parsed) if isinstance(parsed, (list, dict)) else '?'} items")
+                    except json.JSONDecodeError as e:
+                        print(f"   ⚠️ JSON decode failed for content[{i}].text: {str(e)[:100]}")
     elif isinstance(r, list):
         roots.append(r)
+        print(f"   🔍 Result is already a list with {len(r)} items")
     return roots
 
 
@@ -273,16 +278,39 @@ def extract_pulse_metric_id_to_name(tool_results: Optional[List[Dict[str, Any]]]
     out: Dict[str, str] = {}
     for tr in tool_results or []:
         tool_name = tr.get("tool", "unknown")
-        for root in _iter_json_roots_from_tool_result(tr):
+
+        # Debug: Show what we're processing
+        if "pulse" in tool_name.lower():
+            print(f"🔍 Processing tool result from: {tool_name}")
+            result_preview = str(tr.get("result", ""))[:200]
+            print(f"   Result preview: {result_preview}")
+
+        roots = list(_iter_json_roots_from_tool_result(tr))
+
+        if "pulse" in tool_name.lower():
+            print(f"   Found {len(roots)} JSON roots to walk")
+            for i, root in enumerate(roots):
+                root_type = type(root).__name__
+                if isinstance(root, list):
+                    print(f"     Root {i}: list with {len(root)} items")
+                elif isinstance(root, dict):
+                    print(f"     Root {i}: dict with keys: {list(root.keys())[:10]}")
+                else:
+                    print(f"     Root {i}: {root_type}")
+
+        for root in roots:
             before = len(out)
             _walk_pulse_id_names(root, out)
             after = len(out)
             if after > before:
-                print(f"📊 Extracted {after - before} Pulse metric names from {tool_name}")
+                print(f"   ✅ Extracted {after - before} Pulse metric names from {tool_name}")
+
     if out:
         print(f"📊 Total extracted metric names: {len(out)}")
         for mid, mname in list(out.items())[:3]:
             print(f"   - {mid[:8]}... → {mname}")
+    else:
+        print(f"⚠️ No metric names extracted from {len(tool_results or [])} tool results")
     return out
 
 
