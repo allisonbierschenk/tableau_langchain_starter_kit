@@ -635,11 +635,24 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
     if has_pronoun and has_action and conversation_history:
         # User is referring to users from the most recent operation
         # Look for the most recent assistant message with successful add/update operations
+        # BUT: only look in the current "turn" (stop when we hit another user message)
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
 
+        user_message_count = 0
         for msg in reversed(conversation_history):
-            if msg.get("role") != "assistant":
+            role = msg.get("role", "")
+
+            # Stop if we encounter a second user message (means we're in a previous conversation turn)
+            if role == "user":
+                user_message_count += 1
+                if user_message_count >= 2:
+                    print("🔍 Pronoun reference: stopped at previous user message boundary")
+                    break
                 continue
+
+            if role != "assistant":
+                continue
+
             content = msg.get("content", "")
             cl = content.lower()
 
@@ -655,9 +668,6 @@ def _augment_query_with_context(query: str, conversation_history: List[Dict]) ->
                         augmented_query = f"{query} for users {email_list}"
                     print(f"🔍 Pronoun reference resolved - Augmented query: '{augmented_query}'")
                     return augmented_query
-
-            # Stop at first assistant message (don't go too far back)
-            break
 
     if is_just_role and conversation_history:
         # This looks like a follow-up answer to a question
