@@ -306,8 +306,8 @@ async def backfill_pulse_id_names_via_mcp(
 
     extra: Dict[str, str] = {}
 
-    # Try admin-pulse with list-definitions operation (Tableau REST API pattern)
-    for operation in ["list-definitions", "list-all-definitions", "get-definitions", "definitions:list"]:
+    # Try admin-pulse with list-metric-definitions operation (from MCP server source)
+    for operation in ["list-metric-definitions", "batch-get-metric-definitions"]:
         try:
             print(f"📊 Trying admin-pulse operation='{operation}'...")
             raw = await admin_client.call_tool("admin-pulse", {"operation": operation})
