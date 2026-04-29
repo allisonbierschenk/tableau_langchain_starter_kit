@@ -291,30 +291,56 @@ async def backfill_pulse_id_names_via_mcp(
 ) -> Dict[str, str]:
     """
     If the assistant answer still references Pulse metric UUIDs without resolved titles,
-    call lightweight MCP catalog tools and extract id→name from JSON.
+    call Pulse definitions endpoint to get names.
     """
     uuids = metric_uuids_candidates_in_response(response_text)
     missing = [u for u in uuids if u.lower() not in existing]
     low = response_text.lower()
+
+    print(f"📊 Backfill check: {len(uuids)} UUIDs in response, {len(missing)} missing names")
+
     if not uuids:
         return {}
     if not missing and "did not return human-readable" not in low:
         return {}
 
     extra: Dict[str, str] = {}
-    for tool_name in _pulse_catalog_tool_names(tableau_mcp_tools):
+
+    # Try admin-pulse with list-definitions operation (Tableau REST API pattern)
+    for operation in ["list-definitions", "list-all-definitions", "get-definitions", "definitions:list"]:
         try:
-            raw = await admin_client.call_tool(tool_name, {})
+            print(f"📊 Trying admin-pulse operation='{operation}'...")
+            raw = await admin_client.call_tool("admin-pulse", {"operation": operation})
+            tr = {"result": raw}
+            for root in _iter_json_roots_from_tool_result(tr):
+                _walk_pulse_id_names(root, extra)
+                _walk_broad_uuid_to_display_name(root, extra)
+            if extra:
+                print(f"📊 Pulse name backfill: resolved {len(extra)} names via admin-pulse operation='{operation}'")
+                break
         except Exception as ex:
-            print(f"⚠️ Pulse name backfill: {tool_name} failed: {ex}")
+            print(f"⚠️ admin-pulse operation='{operation}' failed: {ex}")
             continue
-        tr = {"result": raw}
-        for root in _iter_json_roots_from_tool_result(tr):
-            _walk_pulse_id_names(root, extra)
-            _walk_broad_uuid_to_display_name(root, extra)
-        if uuids and all(u.lower() in {**existing, **extra} for u in uuids):
-            print(f"📊 Pulse name backfill: resolved via `{tool_name}`")
-            break
+
+    # Fallback: try any pulse tools found by catalog search
+    if not extra:
+        for tool_name in _pulse_catalog_tool_names(tableau_mcp_tools):
+            if tool_name == "admin-pulse":
+                continue  # Already tried above
+            try:
+                print(f"📊 Trying {tool_name}...")
+                raw = await admin_client.call_tool(tool_name, {})
+                tr = {"result": raw}
+                for root in _iter_json_roots_from_tool_result(tr):
+                    _walk_pulse_id_names(root, extra)
+                    _walk_broad_uuid_to_display_name(root, extra)
+                if extra:
+                    print(f"📊 Pulse name backfill: resolved via `{tool_name}`")
+                    break
+            except Exception as ex:
+                print(f"⚠️ Pulse name backfill: {tool_name} failed: {ex}")
+                continue
+
     return dict(extra)
 
 
