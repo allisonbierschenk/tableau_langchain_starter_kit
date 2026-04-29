@@ -37,6 +37,19 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
         if "id" in obj and "specification" in obj:
             mid = obj.get("id")
             spec = obj.get("specification")
+
+            # DEBUG: Show what we're looking at
+            if _depth == 0 and isinstance(mid, str) and _is_uuid(str(mid)):
+                print(f"🔍 Found metric object: id={mid[:8]}...")
+                print(f"   specification type: {type(spec).__name__}")
+                if isinstance(spec, dict):
+                    print(f"   specification keys: {list(spec.keys())[:10]}")
+                    basic = spec.get("basic")
+                    print(f"   specification.basic type: {type(basic).__name__ if basic else 'None'}")
+                    if isinstance(basic, dict):
+                        print(f"   specification.basic keys: {list(basic.keys())}")
+                        print(f"   specification.basic.name: {basic.get('name')}")
+
             if isinstance(mid, str) and _is_uuid(str(mid)) and isinstance(spec, dict):
                 # Try specification.basic.name (Pulse API v1 pattern)
                 basic = spec.get("basic") or {}
@@ -47,6 +60,8 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                 if isinstance(nm, str) and nm.strip():
                     acc[str(mid).lower()] = nm.strip()
                     print(f"📊 Extracted: {mid[:8]}... → {nm.strip()}")
+                elif _depth == 0:
+                    print(f"⚠️ No name found for metric {mid[:8]}... (checked basic.name, spec.name, spec.title, obj.name, obj.title)")
 
         # PATTERN 2: Nested metricDefinition/metric objects (legacy pattern)
         for nested_key in ("metricDefinition", "metric", "pulseMetric", "pulseMetricDefinition"):
