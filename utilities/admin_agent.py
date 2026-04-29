@@ -202,7 +202,26 @@ When asked about "unused workbooks" / "stale content" / "not used in X months", 
 
 **Example:** User asks "workbooks not used in 6 months" → Call `tableau-operations` with `operation: "get-stale-content-report"` and `staleDays: 180`
 
+**Multi-step lineage queries (datasources + stale content):**
+
+For complex queries like "datasources with scheduled refreshes only used by stale views":
+1. First, get stale workbooks using `tableau-operations` with `get-stale-content-report`
+2. Extract workbook IDs from the results
+3. For EACH workbook ID, call `get-workbook` to get datasource connections
+4. Collect unique datasource IDs from all stale workbooks
+5. For EACH datasource ID, check scheduled tasks using `site-jobs` with appropriate filters
+6. Combine results: datasources that (a) are only in stale workbooks and (b) have scheduled refreshes
+
+DO NOT try to filter datasources by workbook in a single query - the API doesn't support complex joins. Build the list iteratively by calling tools in sequence.
+
 **Data sources, workbooks, and content (not only users/groups):** The MCP catalog often includes content and data tools (names vary by server), such as **`list-datasources`**, **`list-workbooks`**, **`query-datasource`**, **`get-datasource-metadata`**, **`search-content`**, etc. For requests like "list all datasources" or "what data sources exist", **search your available tool names and descriptions** for datasource/workbook/query/list patterns and **invoke the matching tool**. Only say a capability is unavailable if **no** such tool appears after you have checked the full list—and then say clearly that the **MCP server did not expose** that tool (e.g. `INCLUDE_TOOLS` / tool groups on the host), not that Tableau lacks the feature.
+
+**CRITICAL - Datasource and Content Query Filters:** When calling list-datasources, list-workbooks, or similar content tools with filters:
+- Use simple string format: `filter=name:eq:MyDataSource` or `filter=id:eq:abc123`
+- DO NOT use nested JSON objects like `{"field": "name", "operator": "eq", "value": "..."}`
+- DO NOT pass workbook objects or complex structures - pass string IDs only
+- If a tool fails with 400 Bad Request, check the filter parameter format first
+- Common working patterns: `name:eq:exact`, `name:ci:case-insensitive`, `name:has:substring`, `id:eq:uuid`
 
 **Permissions and "who has access" - MANDATORY COMPLETE ENUMERATION:**
 
@@ -1188,6 +1207,10 @@ Available site role options:
                         tool_args["body"] = coerce_value_to_plain_dict(tool_args.get("body"))
                     print(f"🔧 Calling MCP tool: {tool_name} (native={native_name})")
                     print(f"   Arguments: {json.dumps(tool_args, indent=2)}")
+
+                    # Log the full URL/endpoint for debugging datasource 400 errors
+                    if "datasource" in native_name.lower() or "workbook" in native_name.lower():
+                        print(f"   📊 Content query - ensure filter syntax is correct (e.g., 'filter=name:eq:value' not nested objects)")
 
                     # Log operation type for debugging
                     if native_name == "admin-users":
