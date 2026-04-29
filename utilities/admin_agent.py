@@ -261,8 +261,13 @@ If there are 100+ users, show the first 50 and say "Showing 50 of 127 users. Let
 
 **CRITICAL - Correct Pulse operation names:**
 - To get user subscriptions: Use `admin-pulse` with operation `list-subscriptions` (NOT `list-subscriptions-for-user`)
-- To get metric names: Use `admin-pulse` with operation `batch-get-metrics` (NOT `metrics:batchGet`)
-- Required flow: First call `list-subscriptions` with `userId` → extract metric IDs → call `batch-get-metrics` with `metricIds` array
+- **IMPORTANT:** batch-get-metrics returns metrics WITHOUT names - you must call definitions endpoint!
+- Required three-step flow for subscription queries:
+  1. Call `list-subscriptions` with `userId` → get metric_id values
+  2. Call `batch-get-metrics` with `metricIds` → get definition_id values for each metric
+  3. Call `list-all-pulse-metric-definitions` (no arguments) → get ALL definitions with names
+  4. Match definition_id from step 2 to id from step 3 to get names
+- Alternatively: Skip batch-get-metrics and use subscription metric_ids directly with definitions endpoint if available
 - If an operation fails with “Invalid arguments”, try the alternative name (e.g., if `metrics:batchGet` fails, try `batch-get-metrics`)
 
 **Handling Pulse responses:**

@@ -85,6 +85,7 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                     acc[str(mid).lower()] = nm.strip()
 
         # PATTERN 3: Objects with metricDefinitionId/metricId + name at same level
+        # OR objects with definition_id that need backfill
         for key in (
             "metricDefinitionId",
             "metricId",
@@ -92,6 +93,7 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
             "pulseMetricId",
             "pulseDefinitionId",
             "definitionId",
+            "definition_id",  # snake_case variant - batch-get-metrics returns this!
         ):
             if key not in obj:
                 continue
@@ -204,7 +206,10 @@ def _walk_broad_uuid_to_display_name(obj: Any, acc: Dict[str, str]) -> None:
 
 
 def metric_uuids_candidates_in_response(text: str) -> List[str]:
-    """UUIDs on lines that look like Pulse metric listings (avoid unrelated admin UUIDs)."""
+    """
+    UUIDs on lines that look like Pulse metric listings (avoid unrelated admin UUIDs).
+    ALWAYS return UUIDs if text mentions 'subscribed to' or 'pulse metrics' - these need backfill!
+    """
     if not text:
         return []
     low = text.lower()
@@ -212,6 +217,7 @@ def metric_uuids_candidates_in_response(text: str) -> List[str]:
         "metric id" in low
         or "pulse" in low
         or "subscription" in low
+        or "subscribed to" in low  # User query pattern
         or "did not return human-readable" in low
     )
     if not has_pulse_context:
@@ -220,7 +226,7 @@ def metric_uuids_candidates_in_response(text: str) -> List[str]:
     seen: Set[str] = set()
     for line in text.split("\n"):
         ll = line.lower()
-        if "metric id" not in ll and "pulse" not in ll:
+        if "metric id" not in ll and "pulse" not in ll and "subscribed" not in ll:
             continue
         for m in _UUID.finditer(line):
             u = m.group(0)
@@ -239,23 +245,41 @@ def metric_uuids_candidates_in_response(text: str) -> List[str]:
 
 
 def _pulse_catalog_tool_names(tableau_mcp_tools: Optional[List[Dict[str, Any]]]) -> List[str]:
-    """Ordered MCP tool names likely to return id+name maps for Pulse metrics."""
+    """
+    Ordered MCP tool names likely to return id+name maps for Pulse metric definitions.
+    Prioritize tools that fetch definitions (not metrics) - definitions have names!
+    """
     if not tableau_mcp_tools:
         return []
     names = [t.get("name") or "" for t in tableau_mcp_tools]
     name_set = set(names)
     out: List[str] = []
+
+    # PRIORITY 1: list-all-pulse-metric-definitions (site-wide catalog)
     preferred = "list-all-pulse-metric-definitions"
     if preferred in name_set:
         out.append(preferred)
+
+    # PRIORITY 2: Any tool with "definition" in the name (not just "metric")
     for n in names:
         if not n or n in out:
             continue
         nl = n.lower()
         if "pulse" not in nl:
             continue
-        if "list" in nl and "definition" in nl and "metric" in nl:
+        # Prefer definition tools over metric tools
+        if "definition" in nl:
             out.append(n)
+
+    # PRIORITY 3: Fallback to other pulse tools
+    for n in names:
+        if not n or n in out:
+            continue
+        nl = n.lower()
+        if "pulse" in nl and "list" in nl:
+            out.append(n)
+
+    print(f"📊 Pulse catalog tool search order: {out[:5]}")
     return out[:5]
 
 
