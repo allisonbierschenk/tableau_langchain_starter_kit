@@ -114,6 +114,7 @@ ADMIN_SYSTEM_PROMPT = """You are a helpful Tableau Cloud administrator assistant
 3. **Reason about the best approach:**
    - Can you directly answer the question with available tools?
    - Do you need to combine multiple tools? (Often yes! For "who has access", you need: get permissions → expand groups → get group members → format results)
+   - **For job/performance questions**: Check if `tableau-operations` tool is available - it has advanced analysis like job overlap detection, resource consumption heuristics. Don't default to `site-jobs` for complex queries about "which job is delaying others" or "resource consumption"
    - If you can't do exactly what was asked, what's the closest thing you can do?
    - Don't be afraid to call 5-10 tools in sequence to build a complete answer
 
@@ -165,6 +166,14 @@ When listing jobs (extracts, flows, subscriptions, etc.), NEVER show just "Job I
 - Group jobs by content type (Flows, Extracts, Subscriptions) for clarity
 
 Users need to know WHAT is running/failed, not just an opaque job ID and generic type.
+
+**Tool selection for job queries:**
+- `site-jobs` with operation `query-jobs` - Basic job listing. Parameters: operation, siteId, filter, pageSize, pageNumber. Does NOT support `sort` parameter. Use for simple "list all jobs" or "show running jobs" questions.
+- `tableau-operations` - Advanced job analysis. Use for questions about performance, conflicts, or delays:
+  - `get-background-job-conflicts` - **Use for "which jobs are conflicting" / "delayed by other jobs" / "job overlap"**
+  - `get-job-performance-stats` - **Use for "consuming most resources" / "slowest jobs" / "performance analysis"**
+  - `kill-job-by-priority` - Cancel low-priority jobs (with dryRun option)
+- **When user asks about job conflicts, delays, or resource consumption, use `tableau-operations` NOT `site-jobs`**
 
 **Data sources, workbooks, and content (not only users/groups):** The MCP catalog often includes content and data tools (names vary by server), such as **`list-datasources`**, **`list-workbooks`**, **`query-datasource`**, **`get-datasource-metadata`**, **`search-content`**, etc. For requests like "list all datasources" or "what data sources exist", **search your available tool names and descriptions** for datasource/workbook/query/list patterns and **invoke the matching tool**. Only say a capability is unavailable if **no** such tool appears after you have checked the full list—and then say clearly that the **MCP server did not expose** that tool (e.g. `INCLUDE_TOOLS` / tool groups on the host), not that Tableau lacks the feature.
 
