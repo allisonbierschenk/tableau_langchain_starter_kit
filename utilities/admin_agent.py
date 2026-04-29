@@ -175,6 +175,21 @@ Users need to know WHAT is running/failed, not just an opaque job ID and generic
   - `kill-job-by-priority` - Cancel low-priority jobs (with dryRun option)
 - **When user asks about job conflicts, delays, or resource consumption, use `tableau-operations` NOT `site-jobs`**
 
+**Stale content detection - USE VIEW STATISTICS, NOT UPDATE DATES:**
+
+When asked about "unused workbooks" / "stale content" / "not used in X months", you need **last viewed date**, NOT last updated date. A workbook updated yesterday could be unused for 6 months.
+
+**CORRECT approach:**
+- Use `tableau-operations` with operation `get-stale-content-report` and `staleDays` parameter
+- This returns workbooks based on actual view statistics (when users last looked at them)
+- Supports `projectFilter` to exclude specific projects
+
+**WRONG approach:**
+- ❌ Filtering workbooks by `updatedAt` date - this shows when the workbook was edited, not when it was viewed
+- ❌ Using `content-workbooks list-workbooks` with date filters on updatedAt
+
+**Example:** User asks "workbooks not used in 6 months" → Call `tableau-operations` with `operation: "get-stale-content-report"` and `staleDays: 180`
+
 **Data sources, workbooks, and content (not only users/groups):** The MCP catalog often includes content and data tools (names vary by server), such as **`list-datasources`**, **`list-workbooks`**, **`query-datasource`**, **`get-datasource-metadata`**, **`search-content`**, etc. For requests like "list all datasources" or "what data sources exist", **search your available tool names and descriptions** for datasource/workbook/query/list patterns and **invoke the matching tool**. Only say a capability is unavailable if **no** such tool appears after you have checked the full list—and then say clearly that the **MCP server did not expose** that tool (e.g. `INCLUDE_TOOLS` / tool groups on the host), not that Tableau lacks the feature.
 
 **Permissions and "who has access" - MANDATORY COMPLETE ENUMERATION:**
