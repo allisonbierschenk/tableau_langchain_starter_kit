@@ -58,7 +58,7 @@ def _object_model_from_schema(model_name: str, schema: Dict[str, Any], depth: in
     safe = _sanitize_model_name(model_name)
     return create_model(
         safe,
-        __config__=ConfigDict(extra="forbid"),
+        __config__=ConfigDict(extra="allow"),  # Allow extra params: MCP schemas may be incomplete vs actual tool capabilities
         **{k: (v[0], v[1]) for k, v in field_defs.items()},
     )
 
@@ -105,7 +105,7 @@ def build_tool_args_model_from_input_schema(tool_name: str, input_schema: Dict[s
     props = input_schema.get("properties") or {}
     if not props:
         class EmptyMCPArgs(BaseModel):
-            model_config = ConfigDict(extra="forbid")
+            model_config = ConfigDict(extra="allow")  # Allow extra params: MCP schemas may be incomplete
 
         return EmptyMCPArgs
 
@@ -122,6 +122,6 @@ def build_tool_args_model_from_input_schema(tool_name: str, input_schema: Dict[s
 
     return create_model(
         prefix,
-        __config__=ConfigDict(extra="forbid"),
+        __config__=ConfigDict(extra="allow"),  # Allow extra params: MCP schemas may be incomplete vs actual tool capabilities
         **{k: (v[0], v[1]) for k, v in field_defs.items()},
     )
