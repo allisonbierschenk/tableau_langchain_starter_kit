@@ -41,6 +41,7 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
             # DEBUG: Show what we're looking at (ANY depth, not just 0)
             if isinstance(mid, str) and _is_uuid(str(mid)):
                 print(f"🔍 Found metric object (depth={_depth}): id={mid[:8]}...")
+                print(f"   ALL TOP-LEVEL KEYS: {list(obj.keys())}")
                 print(f"   specification type: {type(spec).__name__}")
                 if isinstance(spec, dict):
                     print(f"   specification keys: {list(spec.keys())[:10]}")
@@ -51,6 +52,12 @@ def _walk_pulse_id_names(obj: Any, acc: Dict[str, str], _depth: int = 0) -> None
                         print(f"   specification.basic.name: {basic.get('name')}")
                     else:
                         print(f"   ⚠️ specification.basic is not a dict!")
+
+                # Check for name at top level or other common locations
+                for key in ['name', 'title', 'display_name', 'metric_name', 'definition_name']:
+                    val = obj.get(key)
+                    if val:
+                        print(f"   Found at top level: obj.{key} = {val}")
 
             if isinstance(mid, str) and _is_uuid(str(mid)) and isinstance(spec, dict):
                 # Try specification.basic.name (Pulse API v1 pattern)
