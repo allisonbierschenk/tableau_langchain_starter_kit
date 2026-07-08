@@ -2,18 +2,19 @@
 Tableau MCP + LangChain integration.
 
 Uses the official langchain-mcp-adapters package with the MCP Python SDK's
-streamable HTTP transport. No custom JSON-RPC parsing or schema workarounds.
+streamable HTTP transport and langgraph's create_react_agent for the agent loop.
 """
 
-import os
 import json
 import logging
+import os
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
 
 load_dotenv()
 
@@ -24,8 +25,6 @@ logger = logging.getLogger(__name__)
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 if not MCP_SERVER_URL:
     raise ValueError("MCP_SERVER_URL environment variable is required")
-
-MAX_ITERATIONS = 10
 
 SYSTEM_PROMPT = """You are an intelligent data analyst with access to Tableau data through MCP tools. Help users understand their data by using tools strategically and presenting insights.
 
@@ -48,6 +47,7 @@ PULSE METRICS (only when user explicitly asks about Pulse/metrics):
 - Use `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` to discover metrics, then `list-pulse-metrics-from-metric-definition-id` to get metric IDs and details.
 - For a short summary: present the list of metrics and their definitions; you do not need to call `generate-pulse-metric-value-insight-bundle`.
 - **Do NOT call `generate-pulse-metric-value-insight-bundle`** with only `pulseMetricIds`. That tool requires a **full bundle_request object** (version, options, input.metadata, input.metric with definition, specification, etc.). Building that from list results is complex. Prefer summarizing list results or using `generate-pulse-insight-brief` for natural language questions about metrics if the request fits that tool's parameters.
+- **If the user asks about MRR, ARR, churn, or other metrics that sound like Pulse metrics**, check Pulse first using `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` before trying to query the datasource directly.
 
 WORKBOOK/VIEW QUESTIONS:
 - Use `list-workbooks`, `get-workbook`, `list-views`, `get-view-data`, `get-view-image` as needed.
@@ -60,74 +60,14 @@ GENERAL:
   **Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
   **Filters:** [e.g. none, or Region = West, Segment = Enterprise]
   Then give the insights in the body. Do not only mention these in passing in the body—put them in this visible block at the start of the response.
-- If a tool fails, use discovery tools first or try an alternative (e.g. query-datasource with the provided LUID for "this data" instead of Pulse)."""
-
-
-def _build_system_message(
-    tools: list,
-    tableau_viewer_id: Optional[str],
-    preferred_datasource_name: Optional[str],
-    resolved_luid: Optional[str],
-    dashboard_has_pulse_objects: bool,
-) -> str:
-    parts = [SYSTEM_PROMPT]
-
-    tool_list = "\n".join(f"- {t.name}: {t.description}" for t in tools)
-    parts.append(f"\nAvailable tools:\n{tool_list}")
-
-    if tableau_viewer_id:
-        parts.append(
-            f"\n**Viewer identity (from extension / workbook):** `{tableau_viewer_id}`. "
-            "If it contains @, treat it as the viewer's email when appropriate. "
-            "Use for personalization only when appropriate."
-        )
-
-    if resolved_luid and preferred_datasource_name:
-        parts.append(f"""
-**Dashboard context:** The user is viewing a dashboard connected to the datasource "{preferred_datasource_name}". For ANY of these you MUST use the datasource and return data-driven answers (never generic advice without querying):
-- "top insights", "insights from this data", "analyze this dashboard"
-- "What should I focus on to be proactive?", "What should I do next?", "Give me recommendations", "What are my priorities?"
-Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) query-datasource with this LUID to get key metrics (top/bottom performers, trends, totals). (3) Answer with 3–5 concrete insights or recommendations with numbers from the query results.
-Use only query-datasource and get-datasource-metadata with:
-- datasourceLuid: `{resolved_luid}`
-
-**Start every insight response with a visible scope block:** At the very start of your reply (before the insights body), include these three lines so they appear clearly in the response:
-**Measures:** [list what was aggregated, e.g. SUM(Revenue), COUNT(Orders)]
-**Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
-**Filters:** [e.g. none, or list any filters applied]
-Then write the insights. The scope block must be at the top of the response, not only in the body text.
-
-**Pulse Metric cards on the dashboard:** The dashboard may contain Pulse Metric objects. Those cards show values from specific metric definitions (fixed measure, time period, filters). Your answers use query-datasource on the same datasource with flexible queries, so **the numbers you return will not match the Pulse cards.** You MUST add one short sentence to every insight response, e.g.: "These numbers are from the same datasource with flexible queries; if your dashboard has Pulse Metric cards, their values use specific metric definitions and may differ." If the user says the numbers don't match, explain that Pulse cards are predefined metrics and this chat uses ad-hoc queries; for Pulse-based summaries they can ask "List my Pulse metrics" or "Summarize my Pulse metrics.""")
-
-    return "\n".join(parts)
-
-
-def _extract_text_from_tool_result(result: Any) -> str:
-    """Extract plain text from whatever langchain-mcp-adapters returns.
-
-    With response_format='content_and_artifact', ainvoke returns a ToolMessage.
-    We need the text content string for parsing.
-    """
-    from langchain_core.messages import ToolMessage as LCToolMessage
-    if isinstance(result, LCToolMessage):
-        content = result.content
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            # List of content blocks: [{"type": "text", "text": "..."}]
-            parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
-            return "\n".join(parts)
-        return str(content)
-    if isinstance(result, str):
-        return result
-    return json.dumps(result)
+- If a tool fails, use discovery tools first or try an alternative approach."""
 
 
 def _parse_luid_from_list_datasources(text: str) -> Optional[str]:
     """Parse a published datasource LUID from a list-datasources response.
 
-    Tableau's REST API wraps results as:
-      {"datasources": {"datasource": [{"id": "...", ...}]}}  -- nested
+    Handles all known Tableau REST API response shapes:
+      {"datasources": {"datasource": [{"id": "...", ...}]}}  -- standard nested
       [{"id": "..."}]                                         -- direct list
       {"value": [{"id": "..."}]}                             -- OData-style
     """
@@ -139,48 +79,100 @@ def _parse_luid_from_list_datasources(text: str) -> Optional[str]:
     except json.JSONDecodeError:
         return None
 
-    # Unwrap to the array of datasource objects
     if isinstance(parsed, list):
         items = parsed
     elif isinstance(parsed, dict):
-        # {"datasources": {"datasource": [...]}}
         ds = parsed.get("datasources")
         if isinstance(ds, dict):
             items = ds.get("datasource", [])
         elif isinstance(ds, list):
             items = ds
         else:
-            # {"value": [...]}
             items = parsed.get("value", [])
     else:
         return None
 
     if not items or not isinstance(items, list):
         return None
-
     first = items[0]
     if not isinstance(first, dict):
         return None
     return first.get("id") or first.get("luid") or None
 
 
+def _text_from_tool_message(result: Any) -> str:
+    """Extract plain text from a ToolMessage or list of content blocks."""
+    from langchain_core.messages import ToolMessage as LCToolMessage
+    if isinstance(result, LCToolMessage):
+        content = result.content
+    else:
+        content = result
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return str(content)
+
+
 async def _resolve_datasource_luid(
     tools: list, preferred_name: str
 ) -> Optional[str]:
-    """Call list-datasources to resolve a datasource name to its published LUID."""
+    """Resolve a datasource name to its published LUID via list-datasources."""
     list_ds = next((t for t in tools if t.name == "list-datasources"), None)
     if list_ds is None:
         return None
     try:
         raw = await list_ds.ainvoke({"filter": f"name:eq:{preferred_name}"})
-        text = _extract_text_from_tool_result(raw)
+        text = _text_from_tool_message(raw)
         luid = _parse_luid_from_list_datasources(text)
         if not luid:
-            logger.warning("list-datasources returned no parseable LUID for '%s'. Response: %s", preferred_name, text[:300])
+            logger.warning(
+                "list-datasources returned no parseable LUID for '%s'. Response: %s",
+                preferred_name, text[:300],
+            )
         return luid
     except Exception as exc:
         logger.warning("Could not resolve datasource LUID for '%s': %s", preferred_name, exc)
         return None
+
+
+def _build_system_prompt(
+    tools: list,
+    tableau_viewer_id: Optional[str],
+    preferred_datasource_name: Optional[str],
+    resolved_luid: Optional[str],
+    dashboard_has_pulse_objects: bool,
+) -> str:
+    parts = [SYSTEM_PROMPT]
+    parts.append("\nAvailable tools:\n" + "\n".join(f"- {t.name}: {t.description}" for t in tools))
+
+    if tableau_viewer_id:
+        parts.append(
+            f"\n**Viewer identity:** `{tableau_viewer_id}`. "
+            "If it contains @, treat it as the viewer's email when appropriate."
+        )
+
+    if resolved_luid and preferred_datasource_name:
+        parts.append(f"""
+**Dashboard context:** The user is viewing a dashboard connected to the datasource "{preferred_datasource_name}". For ANY of these you MUST use the datasource and return data-driven answers (never generic advice without querying):
+- "top insights", "insights from this data", "analyze this dashboard"
+- "What should I focus on to be proactive?", "What should I do next?", "Give me recommendations", "What are my priorities?"
+Steps: (1) get-datasource-metadata with datasourceLuid below to see fields. (2) query-datasource with this LUID to get key metrics (top/bottom performers, trends, totals). (3) Answer with 3–5 concrete insights or recommendations with numbers from the query results.
+Use only query-datasource and get-datasource-metadata with:
+- datasourceLuid: `{resolved_luid}`
+
+**Start every insight response with a visible scope block:**
+**Measures:** [list what was aggregated, e.g. SUM(Revenue), COUNT(Orders)]
+**Time frame:** [e.g. last complete quarter, current month, all time, or no time filter]
+**Filters:** [e.g. none, or list any filters applied]
+Then write the insights.
+
+**Pulse Metric cards on the dashboard:** Your answers use query-datasource with flexible queries, so the numbers you return will not match Pulse cards. Add one short sentence: "These numbers are from the same datasource with flexible queries; if your dashboard has Pulse Metric cards, their values use specific metric definitions and may differ." """)
+
+    return "\n".join(parts)
 
 
 async def tableau_mcp_chat(
@@ -192,15 +184,10 @@ async def tableau_mcp_chat(
     viewer_email: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    Process a chat query using Tableau MCP tools via langchain-mcp-adapters.
+    Process a chat query using Tableau MCP tools.
 
-    Args:
-        query: The user's message.
-        conversation_history: Prior turns as [{"role": "user"|"assistant", "content": str}].
-        preferred_datasource_name: Datasource name from the dashboard extension context.
-        dashboard_has_pulse_objects: Whether the dashboard contains Pulse metric cards.
-        tableau_viewer_id: The viewer's identity string from the workbook/extension.
-        viewer_email: Viewer email forwarded as X-Tableau-Jwt-Username to the MCP server.
+    Uses langchain-mcp-adapters for tool loading and langgraph's create_react_agent
+    for the agent loop — the standard, maintained integration pattern.
     """
     if conversation_history is None:
         conversation_history = []
@@ -226,10 +213,17 @@ async def tableau_mcp_chat(
     if preferred_datasource_name:
         resolved_luid = await _resolve_datasource_luid(tools, preferred_datasource_name)
         if resolved_luid:
-            logger.info("Resolved '%s' -> LUID %s", preferred_datasource_name, resolved_luid)
             print(f"📌 Resolved dashboard datasource '{preferred_datasource_name}' -> LUID {resolved_luid}")
         else:
             print(f"⚠️ Could not resolve LUID for '{preferred_datasource_name}'; agent will discover datasources")
+
+    system_prompt = _build_system_prompt(
+        tools=tools,
+        tableau_viewer_id=tableau_viewer_id,
+        preferred_datasource_name=preferred_datasource_name,
+        resolved_luid=resolved_luid,
+        dashboard_has_pulse_objects=dashboard_has_pulse_objects,
+    )
 
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -238,17 +232,15 @@ async def tableau_mcp_chat(
         max_tokens=1000,
         timeout=120,
     )
-    llm_with_tools = llm.bind_tools(tools)
 
-    system_content = _build_system_message(
+    agent = create_react_agent(
+        model=llm,
         tools=tools,
-        tableau_viewer_id=tableau_viewer_id,
-        preferred_datasource_name=preferred_datasource_name,
-        resolved_luid=resolved_luid,
-        dashboard_has_pulse_objects=dashboard_has_pulse_objects,
+        prompt=system_prompt,
     )
 
-    messages: list = [SystemMessage(content=system_content)]
+    # Build the input messages from conversation history + current query
+    messages = []
     for msg in conversation_history:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
@@ -256,54 +248,29 @@ async def tableau_mcp_chat(
             messages.append(AIMessage(content=msg["content"]))
     messages.append(HumanMessage(content=query))
 
-    tool_results: list[dict] = []
-    response: AIMessage | None = None
+    result = await agent.ainvoke({"messages": messages})
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
-        logger.debug("Agent iteration %d/%d", iteration, MAX_ITERATIONS)
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
+    # Extract the final AI response and any tool calls made
+    all_messages = result.get("messages", [])
+    final_response = ""
+    tool_results = []
 
-        if not getattr(response, "tool_calls", None):
-            break
+    for msg in all_messages:
+        if isinstance(msg, AIMessage) and msg.content:
+            final_response = msg.content if isinstance(msg.content, str) else str(msg.content)
+        if hasattr(msg, "name") and msg.type == "tool":
+            tool_results.append({
+                "tool": msg.name,
+                "result": msg.content if isinstance(msg.content, str) else str(msg.content),
+            })
 
-        for tool_call in response.tool_calls:
-            name = tool_call["name"]
-            args = tool_call["args"]
-            call_id = tool_call["id"]
-            logger.info("Calling tool %s with args: %s", name, args)
-            print(f"🔧 Executing {name} with args: {args}")
-
-            tool = next((t for t in tools if t.name == name), None)
-            if tool is None:
-                messages.append(ToolMessage(content=f"Tool '{name}' not found.", tool_call_id=call_id))
-                continue
-
-            try:
-                # ainvoke returns a ToolMessage (response_format="content_and_artifact")
-                # with the tool_call_id already set — append it directly.
-                tool_message = await tool.ainvoke(tool_call)
-                messages.append(tool_message)
-                text = _extract_text_from_tool_result(tool_message)
-                tool_results.append({"tool": name, "arguments": args, "result": text})
-                print(f"✅ {name} completed")
-            except Exception as exc:
-                messages.append(ToolMessage(content=f"Error: {exc}", tool_call_id=call_id))
-                tool_results.append({"tool": name, "arguments": args, "error": str(exc)})
-                logger.warning("Tool %s failed: %s", name, exc)
-                print(f"❌ {name} failed: {exc}")
-
-    final_text = (response.content or "").strip() if response else ""
-    if not final_text:
-        final_text = (
-            f"I reached the iteration limit ({MAX_ITERATIONS} steps). "
-            "Try rephrasing or asking a more specific question."
-        )
+    if not final_response:
+        final_response = "I was unable to complete the analysis. Please try rephrasing your question."
 
     return {
-        "response": final_text,
+        "response": final_response,
         "tool_results": tool_results,
-        "iterations": iteration,
+        "iterations": len([m for m in all_messages if isinstance(m, AIMessage)]),
         "logged_in_as": tableau_viewer_id,
         "tableau_viewer_id": tableau_viewer_id,
     }
