@@ -66,6 +66,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://mcpagent.up.railway.app",
+        "https://mcp-extensionapi-langchain.up.railway.app"
         "http://localhost:8000",
         "http://localhost:3000",
         "https://*.tableau.com",

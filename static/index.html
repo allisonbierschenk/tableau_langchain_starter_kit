@@ -7,17 +7,16 @@
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap" rel="stylesheet">
-    
-    <!-- Configuration - Set your deployed backend URL here -->
+    <!-- Load Tableau Extensions API first (no-op when not in Tableau) -->
+    <script src="static/tableau.extensions.1.latest.min.js"></script>
+    <!-- Configuration: use same origin when deployed so extension talks to this app -->
     <script>
-        // Auto-detect environment: use localhost for local development, production URL for deployment
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:8000';
         } else {
-            window.API_BASE_URL = 'https://mcpagent.up.railway.app';
+            window.API_BASE_URL = window.location.origin;
         }
     </script>
-    
     <script src="static/script.js" defer></script>
 </head>
 <body>
@@ -26,16 +25,18 @@
         <div class="container">
             <header>
                 <h1>Conversational Analytics</h1>
+                <p id="viewerIdentityBar" class="viewer-identity-bar" aria-live="polite">
+                    <span class="viewer-identity-row">
+                        <span id="viewerIdentityLabel" class="viewer-identity-label">Dynamic User</span>
+                        <span id="viewerIdentityValue" class="viewer-identity-value">—</span>
+                    </span>
+                    <span id="viewerIdentitySub" class="viewer-identity-sub" hidden></span>
+                </p>
             </header>
 
             <div class="chat-box" id="chatBox">
                 <div class="message bot">
-                    Hello! I can help you explore your Tableau data sources and provide insights.
-                    <br><br>
-                    Try asking:
-                    <br>• "What data sources do I have access to?"
-                    <br>• "List the fields in the databricks superstore datasource"
-                    <br>• "Show me the top 2 insights"
+                    Hello! Ask me anything about your Tableau data.
                 </div>
             </div>
 

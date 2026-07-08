@@ -1,0 +1,4 @@
+# https://docs.railway.com/guides/config-as-code
+# Do not use a committed local .venv on Linux — use the platform Python + pip install.
+[deploy]
+startCommand = "python -m uvicorn web_app:app --host 0.0.0.0 --port $PORT"
