@@ -152,7 +152,7 @@ async def tableau_mcp_chat(
     if viewer_email and is_likely_email(viewer_email):
         headers["X-Tableau-Jwt-Username"] = viewer_email
 
-    async with MultiServerMCPClient(
+    mcp_client = MultiServerMCPClient(
         {
             "tableau": {
                 "transport": "streamable_http",
@@ -160,80 +160,80 @@ async def tableau_mcp_chat(
                 "headers": headers,
             }
         }
-    ) as mcp_client:
-        tools = mcp_client.get_tools()
-        logger.info("Found %d MCP tools: %s", len(tools), [t.name for t in tools])
-        print(f"Found {len(tools)} MCP tools: {[t.name for t in tools]}")
+    )
+    tools = await mcp_client.get_tools()
+    logger.info("Found %d MCP tools: %s", len(tools), [t.name for t in tools])
+    print(f"Found {len(tools)} MCP tools: {[t.name for t in tools]}")
 
-        resolved_luid: Optional[str] = None
-        if preferred_datasource_name:
-            resolved_luid = await _resolve_datasource_luid(tools, preferred_datasource_name)
-            if resolved_luid:
-                logger.info("Resolved '%s' -> LUID %s", preferred_datasource_name, resolved_luid)
-                print(f"📌 Resolved dashboard datasource '{preferred_datasource_name}' -> LUID {resolved_luid}")
+    resolved_luid: Optional[str] = None
+    if preferred_datasource_name:
+        resolved_luid = await _resolve_datasource_luid(tools, preferred_datasource_name)
+        if resolved_luid:
+            logger.info("Resolved '%s' -> LUID %s", preferred_datasource_name, resolved_luid)
+            print(f"📌 Resolved dashboard datasource '{preferred_datasource_name}' -> LUID {resolved_luid}")
+        else:
+            print(f"⚠️ Could not resolve LUID for '{preferred_datasource_name}'; agent will discover datasources")
+
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        api_key=os.getenv("OPENAI_API_KEY"),
+        temperature=0.1,
+        max_tokens=1000,
+        timeout=120,
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    system_content = _build_system_message(
+        tools=tools,
+        tableau_viewer_id=tableau_viewer_id,
+        preferred_datasource_name=preferred_datasource_name,
+        resolved_luid=resolved_luid,
+        dashboard_has_pulse_objects=dashboard_has_pulse_objects,
+    )
+
+    messages: list = [SystemMessage(content=system_content)]
+    for msg in conversation_history:
+        if msg["role"] == "user":
+            messages.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            messages.append(AIMessage(content=msg["content"]))
+    messages.append(HumanMessage(content=query))
+
+    tool_results: list[dict] = []
+    response: AIMessage | None = None
+
+    for iteration in range(1, MAX_ITERATIONS + 1):
+        logger.debug("Agent iteration %d/%d", iteration, MAX_ITERATIONS)
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+
+        if not getattr(response, "tool_calls", None):
+            break
+
+        for tool_call in response.tool_calls:
+            name = tool_call["name"]
+            args = tool_call["args"]
+            call_id = tool_call["id"]
+            logger.info("Calling tool %s with args: %s", name, args)
+            print(f"🔧 Executing {name} with args: {args}")
+
+            tool = next((t for t in tools if t.name == name), None)
+            if tool is None:
+                content = f"Tool '{name}' not found."
             else:
-                print(f"⚠️ Could not resolve LUID for '{preferred_datasource_name}'; agent will discover datasources")
+                try:
+                    content = await tool.ainvoke(args)
+                    if not isinstance(content, str):
+                        content = json.dumps(content)
+                    tool_results.append({"tool": name, "arguments": args, "result": content})
+                    print(f"✅ {name} completed")
+                except Exception as exc:
+                    content = f"Error: {exc}"
+                    tool_results.append({"tool": name, "arguments": args, "error": str(exc)})
+                    logger.warning("Tool %s failed: %s", name, exc)
+                    print(f"❌ {name} failed: {exc}")
 
-        llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            api_key=os.getenv("OPENAI_API_KEY"),
-            temperature=0.1,
-            max_tokens=1000,
-            timeout=120,
-        )
-        llm_with_tools = llm.bind_tools(tools)
-
-        system_content = _build_system_message(
-            tools=tools,
-            tableau_viewer_id=tableau_viewer_id,
-            preferred_datasource_name=preferred_datasource_name,
-            resolved_luid=resolved_luid,
-            dashboard_has_pulse_objects=dashboard_has_pulse_objects,
-        )
-
-        messages: list = [SystemMessage(content=system_content)]
-        for msg in conversation_history:
-            if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                messages.append(AIMessage(content=msg["content"]))
-        messages.append(HumanMessage(content=query))
-
-        tool_results: list[dict] = []
-        response: AIMessage | None = None
-
-        for iteration in range(1, MAX_ITERATIONS + 1):
-            logger.debug("Agent iteration %d/%d", iteration, MAX_ITERATIONS)
-            response = await llm_with_tools.ainvoke(messages)
-            messages.append(response)
-
-            if not getattr(response, "tool_calls", None):
-                break
-
-            for tool_call in response.tool_calls:
-                name = tool_call["name"]
-                args = tool_call["args"]
-                call_id = tool_call["id"]
-                logger.info("Calling tool %s with args: %s", name, args)
-                print(f"🔧 Executing {name} with args: {args}")
-
-                tool = next((t for t in tools if t.name == name), None)
-                if tool is None:
-                    content = f"Tool '{name}' not found."
-                else:
-                    try:
-                        content = await tool.ainvoke(args)
-                        if not isinstance(content, str):
-                            content = json.dumps(content)
-                        tool_results.append({"tool": name, "arguments": args, "result": content})
-                        print(f"✅ {name} completed")
-                    except Exception as exc:
-                        content = f"Error: {exc}"
-                        tool_results.append({"tool": name, "arguments": args, "error": str(exc)})
-                        logger.warning("Tool %s failed: %s", name, exc)
-                        print(f"❌ {name} failed: {exc}")
-
-                messages.append(ToolMessage(content=content, tool_call_id=call_id))
+            messages.append(ToolMessage(content=content, tool_call_id=call_id))
 
     final_text = (response.content or "").strip() if response else ""
     if not final_text:
