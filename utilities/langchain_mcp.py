@@ -394,23 +394,49 @@ class MCPHttpClient:
         return result["result"]["content"]
 
 def _deref_schema(schema: dict) -> dict:
-    """Inline all internal $ref pointers so LangChain validation never chases references."""
-    def resolve(node, root):
+    """Inline all internal $ref pointers so LangChain validation never chases references.
+
+    Handles paths through arrays (anyOf/0, items/1, etc.) and guards against
+    infinite recursion from circular $ref chains.
+    """
+    def lookup(ref: str, root: dict):
+        """Walk a JSON Pointer path like #/$defs/Foo or #/properties/x/anyOf/0."""
+        if not ref.startswith("#/"):
+            return None
+        parts = ref[2:].split("/")
+        node = root
+        for part in parts:
+            if isinstance(node, list):
+                try:
+                    node = node[int(part)]
+                except (ValueError, IndexError):
+                    return None
+            elif isinstance(node, dict):
+                if part not in node:
+                    return None
+                node = node[part]
+            else:
+                return None
+        return node
+
+    def resolve(node, root, visiting: set):
         if isinstance(node, dict):
             if "$ref" in node:
                 ref = node["$ref"]
-                if ref.startswith("#/"):
-                    parts = ref[2:].split("/")
-                    target = root
-                    for part in parts:
-                        target = target[part]
-                    return resolve(target, root)
-            return {k: resolve(v, root) for k, v in node.items()}
+                if ref in visiting:
+                    # Circular ref — return a permissive schema to avoid infinite loop
+                    return {}
+                target = lookup(ref, root)
+                if target is None:
+                    # Unresolvable ref — drop it so LangChain doesn't choke
+                    return {}
+                return resolve(target, root, visiting | {ref})
+            return {k: resolve(v, root, visiting) for k, v in node.items()}
         if isinstance(node, list):
-            return [resolve(item, root) for item in node]
+            return [resolve(item, root, visiting) for item in node]
         return node
 
-    return resolve(schema, schema)
+    return resolve(schema, schema, set())
 
 
 class MCPTool(BaseTool):
