@@ -393,19 +393,40 @@ class MCPHttpClient:
             
         return result["result"]["content"]
 
+def _deref_schema(schema: dict) -> dict:
+    """Inline all internal $ref pointers so LangChain validation never chases references."""
+    def resolve(node, root):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref = node["$ref"]
+                if ref.startswith("#/"):
+                    parts = ref[2:].split("/")
+                    target = root
+                    for part in parts:
+                        target = target[part]
+                    return resolve(target, root)
+            return {k: resolve(v, root) for k, v in node.items()}
+        if isinstance(node, list):
+            return [resolve(item, root) for item in node]
+        return node
+
+    return resolve(schema, schema)
+
+
 class MCPTool(BaseTool):
     """LangChain tool wrapper for MCP tools"""
-    
+
     mcp_client: MCPHttpClient = Field(exclude=True)
     tool_name: str
     tool_description: str
     tool_schema: dict
-    
+
     def __init__(self, mcp_client: MCPHttpClient, tool_name: str, tool_description: str, tool_schema: dict):
+        resolved_schema = _deref_schema(tool_schema)
         super().__init__(
             name=tool_name,
             description=tool_description,
-            args_schema=tool_schema,
+            args_schema=resolved_schema,
             mcp_client=mcp_client,
             tool_name=tool_name,
             tool_description=tool_description,
