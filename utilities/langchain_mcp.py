@@ -394,13 +394,12 @@ class MCPHttpClient:
         return result["result"]["content"]
 
 def _deref_schema(schema: dict) -> dict:
-    """Inline all internal $ref pointers so LangChain validation never chases references.
+    """Inline all internal $ref pointers so the schema is self-contained.
 
     Handles paths through arrays (anyOf/0, items/1, etc.) and guards against
     infinite recursion from circular $ref chains.
     """
     def lookup(ref: str, root: dict):
-        """Walk a JSON Pointer path like #/$defs/Foo or #/properties/x/anyOf/0."""
         if not ref.startswith("#/"):
             return None
         parts = ref[2:].split("/")
@@ -424,11 +423,9 @@ def _deref_schema(schema: dict) -> dict:
             if "$ref" in node:
                 ref = node["$ref"]
                 if ref in visiting:
-                    # Circular ref — return a permissive schema to avoid infinite loop
                     return {}
                 target = lookup(ref, root)
                 if target is None:
-                    # Unresolvable ref — drop it so LangChain doesn't choke
                     return {}
                 return resolve(target, root, visiting | {ref})
             return {k: resolve(v, root, visiting) for k, v in node.items()}
@@ -446,18 +443,36 @@ class MCPTool(BaseTool):
     tool_name: str
     tool_description: str
     tool_schema: dict
+    # Dereffed schema stored for tool_call_schema — kept off args_schema intentionally
+    # so LangChain's Pydantic validation pipeline never runs against the complex MCP
+    # schema (which has $defs/$ref structures that jsonschema_to_pydantic can't handle).
+    # The LLM still gets the correct schema via our tool_call_schema override below.
+    _resolved_schema: dict = {}
 
     def __init__(self, mcp_client: MCPHttpClient, tool_name: str, tool_description: str, tool_schema: dict):
-        resolved_schema = _deref_schema(tool_schema)
         super().__init__(
             name=tool_name,
             description=tool_description,
-            args_schema=resolved_schema,
             mcp_client=mcp_client,
             tool_name=tool_name,
             tool_description=tool_description,
             tool_schema=tool_schema
         )
+        # Store outside Pydantic so it doesn't trigger validation
+        object.__setattr__(self, '_resolved_schema', _deref_schema(tool_schema))
+
+    @property
+    def tool_call_schema(self):
+        """Return the dereffed MCP schema as the OpenAI function definition.
+
+        bind_tools() uses this property — not args_schema — to build the tools
+        array sent to the LLM. By overriding here we give the LLM the full
+        correct schema without routing it through LangChain's Pydantic machinery.
+        """
+        return {
+            **self._resolved_schema,
+            "description": self.description,
+        }
     
     def _run(self, **kwargs) -> str:
         """Sync wrapper - not implemented"""
