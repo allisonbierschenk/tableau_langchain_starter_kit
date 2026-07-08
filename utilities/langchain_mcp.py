@@ -102,6 +102,68 @@ Then write the insights. The scope block must be at the top of the response, not
     return "\n".join(parts)
 
 
+def _extract_text_from_tool_result(result: Any) -> str:
+    """Extract plain text from whatever langchain-mcp-adapters returns.
+
+    With response_format='content_and_artifact', ainvoke returns a ToolMessage.
+    We need the text content string for parsing.
+    """
+    from langchain_core.messages import ToolMessage as LCToolMessage
+    if isinstance(result, LCToolMessage):
+        content = result.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # List of content blocks: [{"type": "text", "text": "..."}]
+            parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            return "\n".join(parts)
+        return str(content)
+    if isinstance(result, str):
+        return result
+    return json.dumps(result)
+
+
+def _parse_luid_from_list_datasources(text: str) -> Optional[str]:
+    """Parse a published datasource LUID from a list-datasources response.
+
+    Tableau's REST API wraps results as:
+      {"datasources": {"datasource": [{"id": "...", ...}]}}  -- nested
+      [{"id": "..."}]                                         -- direct list
+      {"value": [{"id": "..."}]}                             -- OData-style
+    """
+    text = text.strip()
+    if not text.startswith(("{", "[")):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    # Unwrap to the array of datasource objects
+    if isinstance(parsed, list):
+        items = parsed
+    elif isinstance(parsed, dict):
+        # {"datasources": {"datasource": [...]}}
+        ds = parsed.get("datasources")
+        if isinstance(ds, dict):
+            items = ds.get("datasource", [])
+        elif isinstance(ds, list):
+            items = ds
+        else:
+            # {"value": [...]}
+            items = parsed.get("value", [])
+    else:
+        return None
+
+    if not items or not isinstance(items, list):
+        return None
+
+    first = items[0]
+    if not isinstance(first, dict):
+        return None
+    return first.get("id") or first.get("luid") or None
+
+
 async def _resolve_datasource_luid(
     tools: list, preferred_name: str
 ) -> Optional[str]:
@@ -110,17 +172,12 @@ async def _resolve_datasource_luid(
     if list_ds is None:
         return None
     try:
-        result = await list_ds.ainvoke({"filter": f"name:eq:{preferred_name}"})
-        # Tool returns a string; parse to find the id/luid field
-        text = result if isinstance(result, str) else json.dumps(result)
-        parsed = json.loads(text) if text.strip().startswith(("{", "[")) else None
-        if not parsed:
-            return None
-        items = parsed if isinstance(parsed, list) else parsed.get("datasources", parsed.get("value", []))
-        if not items or not isinstance(items, list):
-            return None
-        first = items[0]
-        return first.get("id") or first.get("luid") if isinstance(first, dict) else None
+        raw = await list_ds.ainvoke({"filter": f"name:eq:{preferred_name}"})
+        text = _extract_text_from_tool_result(raw)
+        luid = _parse_luid_from_list_datasources(text)
+        if not luid:
+            logger.warning("list-datasources returned no parseable LUID for '%s'. Response: %s", preferred_name, text[:300])
+        return luid
     except Exception as exc:
         logger.warning("Could not resolve datasource LUID for '%s': %s", preferred_name, exc)
         return None
@@ -219,21 +276,22 @@ async def tableau_mcp_chat(
 
             tool = next((t for t in tools if t.name == name), None)
             if tool is None:
-                content = f"Tool '{name}' not found."
-            else:
-                try:
-                    content = await tool.ainvoke(args)
-                    if not isinstance(content, str):
-                        content = json.dumps(content)
-                    tool_results.append({"tool": name, "arguments": args, "result": content})
-                    print(f"✅ {name} completed")
-                except Exception as exc:
-                    content = f"Error: {exc}"
-                    tool_results.append({"tool": name, "arguments": args, "error": str(exc)})
-                    logger.warning("Tool %s failed: %s", name, exc)
-                    print(f"❌ {name} failed: {exc}")
+                messages.append(ToolMessage(content=f"Tool '{name}' not found.", tool_call_id=call_id))
+                continue
 
-            messages.append(ToolMessage(content=content, tool_call_id=call_id))
+            try:
+                # ainvoke returns a ToolMessage (response_format="content_and_artifact")
+                # with the tool_call_id already set — append it directly.
+                tool_message = await tool.ainvoke(tool_call)
+                messages.append(tool_message)
+                text = _extract_text_from_tool_result(tool_message)
+                tool_results.append({"tool": name, "arguments": args, "result": text})
+                print(f"✅ {name} completed")
+            except Exception as exc:
+                messages.append(ToolMessage(content=f"Error: {exc}", tool_call_id=call_id))
+                tool_results.append({"tool": name, "arguments": args, "error": str(exc)})
+                logger.warning("Tool %s failed: %s", name, exc)
+                print(f"❌ {name} failed: {exc}")
 
     final_text = (response.content or "").strip() if response else ""
     if not final_text:
