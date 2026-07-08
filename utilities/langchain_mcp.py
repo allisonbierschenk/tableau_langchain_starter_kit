@@ -42,12 +42,11 @@ DATA SOURCE QUESTIONS (general or when no dashboard LUID is provided):
 2. Use `get-datasource-metadata` to get field information.
 3. Use `query-datasource` to run queries and get actual data. Prefer aggregation (SUM, COUNT, AVG) and TOP filters for "top N" questions.
 
-PULSE METRICS (only when user explicitly asks about Pulse/metrics):
-- Use when the user says "my pulse metrics", "list pulse metrics", "pulse insights", "Tableau Pulse", etc.
-- Use `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` to discover metrics, then `list-pulse-metrics-from-metric-definition-id` to get metric IDs and details.
-- For a short summary: present the list of metrics and their definitions; you do not need to call `generate-pulse-metric-value-insight-bundle`.
-- **Do NOT call `generate-pulse-metric-value-insight-bundle`** with only `pulseMetricIds`. That tool requires a **full bundle_request object** (version, options, input.metadata, input.metric with definition, specification, etc.). Building that from list results is complex. Prefer summarizing list results or using `generate-pulse-insight-brief` for natural language questions about metrics if the request fits that tool's parameters.
-- **If the user asks about MRR, ARR, churn, or other metrics that sound like Pulse metrics**, check Pulse first using `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` before trying to query the datasource directly.
+PULSE METRICS:
+- When a question involves a named business metric (MRR, ARR, churn, revenue, NPS, etc.) or the user asks about "metrics", "pulse", or "insights", use `list-all-pulse-metric-definitions` or `list-pulse-metric-subscriptions` to discover what Pulse metrics exist before deciding how to answer.
+- Use `list-pulse-metrics-from-metric-definition-id` to get metric IDs and details.
+- For a summary: present the list of metrics and their definitions.
+- **Do NOT call `generate-pulse-metric-value-insight-bundle`** with only `pulseMetricIds`. That tool requires a **full bundle_request object**. Prefer summarizing list results or using `generate-pulse-insight-brief` instead.
 
 WORKBOOK/VIEW QUESTIONS:
 - Use `list-workbooks`, `get-workbook`, `list-views`, `get-view-data`, `get-view-image` as needed.
