@@ -405,6 +405,7 @@ class MCPTool(BaseTool):
         super().__init__(
             name=tool_name,
             description=tool_description,
+            args_schema=tool_schema,
             mcp_client=mcp_client,
             tool_name=tool_name,
             tool_description=tool_description,
